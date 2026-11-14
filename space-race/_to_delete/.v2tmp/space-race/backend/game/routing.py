@@ -1,0 +1,8 @@
+from django.urls import re_path
+
+from . import consumers
+
+websocket_urlpatterns = [
+    re_path(r"^ws/lobby/$", consumers.LobbyConsumer.as_asgi()),
+    re_path(r"^ws/match/(?P<match_id>[0-9a-f-]{36})/$", consumers.MatchConsumer.as_asgi()),
+]
