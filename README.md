@@ -6,7 +6,7 @@
 
 **NASA Space Apps Challenge 2026 · Challenge: _Space Mission Design Game_ · Team GENESIS Z**
 
-[**▶ Play now**](https://space-game-ten-rho.vercel.app) · [🎬 30-second demo video](DEMO_30S_LINK) · [🎥 5-minute project & product video](PROJECT_5MIN_LINK) · [🔬 How we validate the physics](#-real-nasa-data-tested-physics)
+[**▶ Play now**](https://space-game-ten-rho.vercel.app) · [🎬 30-second demo video](DEMO_30S_LINK) · [🎥 5-minute project & product video](PROJECT_5MIN_LINK) · [🔬 How we validate the physics](#-how-we-validate-the-physics)
 
 </div>
 
@@ -63,6 +63,49 @@ The simulator is tested against **21 published numbers**, including Falcon Heavy
 Hohmann transfer to Mars, solar irradiance at Mars and Venus, Earth–Mars light time and Curiosity's MMRTG output
 after 12 years. Each check is shown in-game with our value, the published value and the error, and is labelled as an
 independent prediction, a calibration or input data.
+
+### 🔬 How we validate the physics
+
+We don't just say the game is realistic; we check it. `space-race/backend/game/validation.py` runs the simulator's **own equations** against numbers published by NASA, JPL, textbooks and launch providers, and reports the error for each one. The same checks run in the automated tests (`tests.py`), so if anyone breaks the physics, the build fails, and they are shown live in the game on the **Science & data** page.
+
+**Result: 21 of 21 checks pass** within their tolerance. Every check is labelled honestly:
+
+- **Prediction** (11): an independent result of our equations that we never tuned to the answer.
+- **Calibration** (5): we fitted one parameter (for example a rocket's upper stage) to this number, so it shows the fit is consistent.
+- **Input data** (5): a published value we use directly, listed so judges can trace it.
+
+| Area | Check | Our model | Published | Error | Tolerance | Type | Source |
+|---|---|---|---|---|---|---|---|
+| Launch | Falcon 9 expendable → Mars | 4,188 kg | 4,020 kg | +4.2% | ±10% | Calibration | SpaceX published capability |
+| Launch | Falcon Heavy expendable → Mars | 17,205 kg | 16,800 kg | +2.4% | ±10% | Calibration | SpaceX published capability |
+| Launch | Falcon 9 (reusable) → GTO | 5,616 kg | 5,500 kg | +2.1% | ±10% | Prediction | SpaceX Capabilities & Services 2026 ($74M up to 5.5 t GTO) |
+| Launch | Falcon Heavy expendable → GTO | 27,253 kg | 26,700 kg | +2.1% | ±10% | Prediction | SpaceX published capability |
+| Launch | Vulcan VC6 → GTO | 14,419 kg | 14,400 kg | +0.1% | ±10% | Calibration | ULA published capability |
+| Launch | New Glenn → GTO | 12,995 kg | 13,000 kg | 0.0% | ±10% | Calibration | Blue Origin published capability |
+| Launch | Falcon 9 lift-off TWR (no payload) | 1.41 | 1.41 | +0.2% | ±5% | Prediction | 7,607 kN thrust / 549 t (SpaceX) |
+| Orbits | Earth→Mars Hohmann transfer time | 258.9 days | 259 days | -0.1% | ±3% | Prediction | Textbook (Curtis, Orbital Mechanics) |
+| Orbits | Earth→Venus Hohmann transfer time | 146.1 days | 146 days | +0.0% | ±3% | Prediction | Textbook (Curtis, Orbital Mechanics) |
+| Orbits | Escape Δv from 200 km LEO | 3,224 m/s | 3,226 m/s | -0.1% | ±2% | Prediction | Vis-viva equation |
+| Orbits | Max Earth-Mars light time | 22.31 min | 22.3 min | +0.1% | ±5% | Prediction | NASA: 3 to 22 minutes |
+| Orbits | Min Earth-Mars light time | 3.31 min | 3 min | +10.4% | ±15% | Prediction | NASA: 3 to 22 minutes |
+| Power | Solar irradiance at Mars | 586.2 W/m² | 586.2 W/m² | +0.0% | ±2% | Prediction | NASA Mars Fact Sheet |
+| Power | Solar irradiance at Venus | 2,601 W/m² | 2,601 W/m² | 0.0% | ±2% | Prediction | NASA Venus Fact Sheet |
+| Power | Curiosity MMRTG after ~12.3 years | 77.57 W | 77.2 W | +0.5% | ±5% | Calibration | NASA RPS Program update 2024 (F1 on Curiosity: 77.2 We) |
+| Power | MMRTG specific power | 2.44 W/kg | 2.8 W/kg | -12.7% | ±15% | Input data | NASA MMRTG fact sheet |
+| Mars time | Mars season at Perseverance landing (Ls) | 5.7 ° | 5.2 ° | +9.6% | ±25% | Prediction | NASA/JPL: landed in northern spring, Ls ≈ 5° |
+| Mass | HiRISE-class camera mass | 65 kg | 65 kg | +0.0% | ±2% | Input data | HiRISE on MRO (Ball Aerospace) |
+| Cost | HiRISE-class camera cost | 40 $M | 40 $M | +0.0% | ±5% | Input data | HiRISE on MRO |
+| Cost | MMRTG cost | 75 $M | 75 $M | +0.0% | ±5% | Input data | U.S. DOE (Perseverance's MMRTG) |
+| Cost | Falcon 9 list price | 74 $M | 74 $M | +0.0% | ±1% | Input data | SpaceX 2026 list price |
+
+**It already caught a real bug.** Our first RTG decay rate (4.8% a year) predicted that Curiosity's MMRTG would give 59 W after 12 years. NASA reports 77.2 W, so we corrected the model to 2.8% a year, and every nuclear-powered mission in the game became more accurate.
+
+Run the checks yourself:
+
+```bash
+cd space-race/backend
+python manage.py test game
+```
 
 ## 🏗️ How it works
 
