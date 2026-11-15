@@ -8,6 +8,8 @@
 
 [**▶ Play now**](https://space-game-ten-rho.vercel.app) · [🎬 Project Demonstration Video](https://youtu.be/q7to-Z4LpRY) · [🎥 Project and Product Video](PROJECT_5MIN_LINK) · [📦 Slide](#-how-we-validate-the-physics)
 
+· [🔗 Google Drive](https://drive.google.com/drive/folders/1oN3gXRLlz-W0hhuyjs2YZ-tLWFNC5zLY?usp=drive_link)
+
 </div>
 
 ---
