@@ -120,9 +120,12 @@ export interface PlayerState {
   picks: number[];
   ready: boolean;
   stats: Stats;
+  quiz?: { idx: number; correct: number; bonus: number; total: number };
 }
 
 export interface MatchState {
+  quiz?: { id: string; topic: string; q: string; options: string[] }[];
+  quiz_bonus?: number;
   match_id: string;
   status: "drafting" | "finished" | "abandoned";
   phase: string;
@@ -164,4 +167,5 @@ export type ServerMsg =
   | { type: "opponent_status"; online: boolean }
   | { type: "presence"; users: User[] }
   | { type: "queued" } | { type: "cancelled" }
-  | { type: "match_found"; match_id: string };
+  | { type: "match_found"; match_id: string }
+  | { type: "quiz_result"; question_id: string; choice: number; answer: number; correct: boolean; explain: string; bonus: number };

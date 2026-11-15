@@ -92,6 +92,11 @@ class MatchConsumer(AsyncJsonWebsocketConsumer):
             return
         if content.get("type") == "tick" and not launched:
             return  # nothing changed, don't spam the group
+        if content.get("type") == "quiz":
+            # the graded answer goes only to the player who answered (the rival gets the same question)
+            last = (match.state["players"].get(str(self.user.id), {}).get("quiz") or {}).get("last")
+            if last:
+                await self.send_json({"type": "quiz_result", **last})
         payload = await database_sync_to_async(self._payload)(match)
         # Redis fan-out: both players' sockets get the new state instantly
         await self.channel_layer.group_send(self.group, {"type": "broadcast", "payload": payload})

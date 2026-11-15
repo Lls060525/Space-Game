@@ -1,14 +1,40 @@
 import { useEffect, useMemo } from "react";
 import { sfx } from "../lib/sfx";
 import { debrief } from "../lib/debrief";
+import { historyFor, type History } from "../lib/history";
+import { HistoryCard } from "./HistoryCard";
+import { ShareCard, type ResultShare } from "./ShareCard";
 import type { SimResult } from "../lib/types";
 
 interface Row { label: string; result: SimResult; color: string; winner?: boolean }
 
 const PHASES = ["launch", "cruise", "radiation", "insertion", "operations"];
 
-export function Results({ rows, onBack, backLabel = "Back to lobby", myResultWon = false }:
-  { rows: Row[]; onBack: () => void; backLabel?: string; myResultWon?: boolean }) {
+/** The share card describes the first row (always "you"). */
+function shareFor(r: Row, destination: string, player: string, won: boolean, rival?: string): ResultShare {
+  const s = r.result.stats;
+  const sci = Math.round(r.result.science_pct * 100);
+  const margin = Math.round((s.system_margin ?? 0) * 100);
+  const vs = rival ? (won ? `🏆 Beat ${rival} · ` : `⚔️ vs ${rival} · `) : "";
+  const good = r.result.success;
+  const headline = good ? `Reached ${destination} and delivered ${sci}% of the science` : r.result.outcome;
+  const text = good
+    ? `${vs}🚀 I reached ${destination} with a ${margin}% mass margin and ${sci}% of the science target: ${r.result.score.toLocaleString()} pts in The Space Race. Can you beat it?`
+    : `${vs}💥 My ${destination} probe failed (${r.result.outcome}) with ${r.result.score.toLocaleString()} pts. Think you can engineer it better?`;
+  return {
+    mode: rival ? "MISSION DESIGN · PvP" : "MISSION DESIGN", planet: destination, headline, good, player,
+    score: r.result.score, text,
+    stats: [
+      { label: "Science", value: `${sci}%` },
+      { label: "Mass margin", value: `${margin}%` },
+      { label: "Cost", value: `$${Math.round(r.result.as_built?.actual_cost ?? s.cost)}M` },
+      { label: "Days alive", value: `${r.result.survived_days}/${r.result.days}` },
+    ],
+  };
+}
+
+export function Results({ rows, onBack, backLabel = "Back to lobby", myResultWon = false, destination, player }:
+  { rows: Row[]; onBack: () => void; backLabel?: string; myResultWon?: boolean; destination?: string; player?: string }) {
   useEffect(() => { myResultWon ? sfx.fanfare() : sfx.sad(); }, [myResultWon]);
   const confetti = useMemo(() => Array.from({ length: 90 }, (_, i) => ({
     left: Math.random() * 100, delay: Math.random() * 1.5, dur: 2.5 + Math.random() * 2,
@@ -53,13 +79,22 @@ export function Results({ rows, onBack, backLabel = "Back to lobby", myResultWon
             </dl>
             <h4>🧑‍🚀 Flight director's debrief</h4>
             <ul className="debrief">
-              {debrief(r.result).map((l, i) => (
-                <li key={i} className={l.tone}>
-                  <b>{l.title}</b>{l.equation && <span className="muted small"> · see “{l.equation}”</span>}
-                  <div className="small">{l.why}</div>
-                  {l.fix && <div className="small fix">🔧 {l.fix}</div>}
-                </li>
-              ))}
+              {(() => {
+                const seen = new Set<History>();
+                return debrief(r.result).map((l, i) => {
+                  const h = historyFor(l);
+                  const showH = h && !seen.has(h) && seen.size < 2;
+                  if (h && showH) seen.add(h);
+                  return (
+                    <li key={i} className={l.tone}>
+                      <b>{l.title}</b>{l.equation && <span className="muted small"> · see “{l.equation}”</span>}
+                      <div className="small">{l.why}</div>
+                      {l.fix && <div className="small fix">🔧 {l.fix}</div>}
+                      {showH && <HistoryCard h={h!} />}
+                    </li>
+                  );
+                });
+              })()}
             </ul>
             <h4>Success odds you engineered</h4>
             <ul className="odds">
@@ -75,6 +110,9 @@ export function Results({ rows, onBack, backLabel = "Back to lobby", myResultWon
           </div>
         ))}
       </div>
+      {destination && rows[0] && (
+        <ShareCard data={shareFor(rows[0], destination, player ?? rows[0].label, myResultWon, rows[1]?.label)} />
+      )}
       <p className="muted center">Both spacecraft flew with the same dice rolls - the difference was engineering.</p>
       <div className="center"><button className="primary" onClick={onBack}>{backLabel}</button></div>
     </div>

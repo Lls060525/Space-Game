@@ -5,6 +5,7 @@ import type { Component, MatchState, SimResult, User } from "../lib/types";
 import { useSocket } from "../lib/useSocket";
 import { DraftBoard } from "./DraftBoard";
 import { Launch3D } from "./Launch3D";
+import { QuizPanel, type QuizFeedback } from "./QuizPanel";
 import { Results } from "./Results";
 
 const ME = "#7dd3fc";
@@ -19,6 +20,7 @@ export function MatchScreen({ matchId, me, components, onExit }:
   const [animDone, setAnimDone] = useState(false);
   const [error, setError] = useState("");
   const [rivalOnline, setRivalOnline] = useState(true);
+  const [quizFb, setQuizFb] = useState<QuizFeedback | null>(null);
   const clockOffset = useRef(0); // server_time - client_time
   const [feed, setFeed] = useState<{ id: number; text: string }[]>([]);
   const prevRival = useRef<number[] | null>(null);
@@ -51,6 +53,10 @@ export function MatchScreen({ matchId, me, components, onExit }:
       trackRival(msg.state);
       setState(msg.state);
       setError("");
+    }
+    if (msg.type === "quiz_result") {
+      setQuizFb(msg);
+      msg.correct ? sfx.ready() : sfx.error();
     }
     if (msg.type === "result") {
       const { forfeit_by, ...rest } = msg.results;
@@ -89,7 +95,8 @@ export function MatchScreen({ matchId, me, components, onExit }:
         {animDone
           ? <>
               <h2 className="center">{state.mission.name}</h2>
-              <Results onBack={onExit} myResultWon={winnerId === me.id} rows={lanes.map((l, i) => ({
+              <Results onBack={onExit} myResultWon={winnerId === me.id} destination={state.mission.destination} player={me.username}
+                       rows={lanes.map((l, i) => ({
                 ...l, winner: winnerId === (i === 0 ? me.id : Number(rivalId)) }))} />
             </>
           : <>
@@ -118,6 +125,12 @@ export function MatchScreen({ matchId, me, components, onExit }:
         onReady={() => send({ type: "ready" })}
         onUnready={() => send({ type: "unready" })}
         onTimeout={() => send({ type: "tick" })}
+        quiz={state.quiz?.length ? (
+          <QuizPanel questions={state.quiz} idx={mine.quiz?.idx ?? 0} correct={mine.quiz?.correct ?? 0}
+                     bonus={mine.quiz?.bonus ?? 0} perQuestion={state.quiz_bonus ?? 10} feedback={quizFb}
+                     onAnswer={(q, choice) => send({ type: "quiz", question_id: q.id, choice })}
+                     onDismiss={() => setQuizFb(null)} />
+        ) : null}
       />
       <div className="center"><button className="link" onClick={() => { send({ type: "forfeit" }); }}>Abandon mission</button></div>
     </>

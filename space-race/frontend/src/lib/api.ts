@@ -46,8 +46,10 @@ export const api = {
   components: () => req<Component[]>("/components/"),
   missions: () => req<Mission[]>("/missions/"),
   leaderboard: () => req<{ username: string; rating: number; games: number; wins: number; losses: number; best_score: number }[]>("/leaderboard/"),
-  analyze: (mission: string, component_ids: number[], class_code?: string) =>
-    req<Stats>("/practice/", { method: "POST", body: JSON.stringify({ mission, component_ids, class_code }) }),
+  analyze: (mission: string, component_ids: number[], class_code?: string, bonus_budget = 0) =>
+    req<Stats>("/practice/", { method: "POST", body: JSON.stringify({ mission, component_ids, class_code, bonus_budget }) }),
+  quizPractice: () =>
+    req<{ bonus: number; questions: { id: string; topic: string; q: string; options: string[]; answer: number; explain: string }[] }>("/quiz/practice/"),
   createClass: (mission: string, title: string) =>
     req<ClassInfo>("/class/", { method: "POST", body: JSON.stringify({ mission, title }) }),
   getClass: (code: string) => req<ClassInfo>(`/class/${encodeURIComponent(code)}/`),
@@ -58,8 +60,8 @@ export const api = {
   nasa: () => req<NasaConditions>("/nasa/conditions/"),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   validation: () => req<any>("/validation/"),
-  practiceLaunch: (mission: string, component_ids: number[], class_code?: string) =>
-    req<SimResult>("/practice/", { method: "POST", body: JSON.stringify({ mission, component_ids, launch: true, class_code }) }),
+  practiceLaunch: (mission: string, component_ids: number[], class_code?: string, bonus_budget = 0) =>
+    req<SimResult>("/practice/", { method: "POST", body: JSON.stringify({ mission, component_ids, launch: true, class_code, bonus_budget }) }),
 };
 
 export function wsUrl(path: string) {

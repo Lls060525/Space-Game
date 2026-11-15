@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Mission, Stats } from "../lib/types";
+import { PLAY_FOR_TITLE, Playground } from "./Playground";
 
 /**
  * Live "flight dynamics notebook": every equation the simulator uses, with YOUR numbers plugged in,
@@ -285,6 +286,7 @@ const GROUPS = ["Launch", "Mass", "Propulsion", "Power", "Battery", "Comms", "Th
 
 export function EquationsPanel({ stats, mission }: { stats: Stats; mission: Mission }) {
   const [group, setGroup] = useState<string>("all");
+  const [playing, setPlaying] = useState<string | null>(null);
   if (!stats.eq) return null;
   const eqs = equations(stats, mission);
   const shown = eqs.filter((q) => group === "all" || q.group === group);
@@ -292,7 +294,7 @@ export function EquationsPanel({ stats, mission }: { stats: Stats; mission: Miss
   return (
     <section className="equations">
       <div className="eq-head">
-        <h3>📐 Flight dynamics notebook <span className="muted small">live: every number is your current design</span></h3>
+        <h3>📐 Flight dynamics notebook <span className="muted small">live: every number is your current design · 🎛 cards have a sandbox</span></h3>
         <div className="small">
           <span className="good-text">● {count("good")} optimal</span>{" "}
           <span className="warn-text">● {count("warn")} off-optimum</span>{" "}
@@ -315,6 +317,15 @@ export function EquationsPanel({ stats, mission }: { stats: Stats; mission: Miss
             <div className="eq-opt small"><b>Optimum:</b> {q.optimum}</div>
             {q.fix && <div className="eq-fix small">🔧 {q.fix}</div>}
             <div className="eq-real small muted">🛰 Real data: {q.real}</div>
+            {PLAY_FOR_TITLE[q.title] && (
+              <>
+                <button className={`try-btn ${playing === q.title ? "on" : ""}`}
+                        onClick={() => setPlaying(playing === q.title ? null : q.title)}>
+                  🎛 {playing === q.title ? "Close sandbox" : "Try it: play with the numbers"}
+                </button>
+                {playing === q.title && <Playground kind={PLAY_FOR_TITLE[q.title]} stats={stats} mission={mission} />}
+              </>
+            )}
           </div>
         ))}
         {shown.length === 0 && <p className="muted">Pick a rocket and some parts to see the equations come alive.</p>}

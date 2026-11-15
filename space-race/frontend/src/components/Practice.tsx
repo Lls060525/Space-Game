@@ -4,6 +4,8 @@ import type { Component, Mission, SimResult, Stats } from "../lib/types";
 import { Coach } from "./Coach";
 import { DraftBoard } from "./DraftBoard";
 import { Launch3D } from "./Launch3D";
+import { QuizPanel, type QuizFeedback } from "./QuizPanel";
+import { sfx } from "../lib/sfx";
 import { Results } from "./Results";
 
 /** Single-player sandbox: same board, full stock, stats from the same server-side sim. */
@@ -17,6 +19,25 @@ export function Practice({ components, onExit }: { components: Component[]; onEx
   const [cls, setCls] = useState<ClassInfo | null>(null);
   const [codeInput, setCodeInput] = useState("");
   const [clsMsg, setClsMsg] = useState("");
+  // Mission Control challenges (solo): graded in the browser, bonus raises the practice cost cap
+  type PQ = Awaited<ReturnType<typeof api.quizPractice>>["questions"][number];
+  const [quizQs, setQuizQs] = useState<PQ[]>([]);
+  const [quizPer, setQuizPer] = useState(10);
+  const [quizIdx, setQuizIdx] = useState(0);
+  const [quizRight, setQuizRight] = useState(0);
+  const [quizFb, setQuizFb] = useState<QuizFeedback | null>(null);
+  const bonus = cls ? 0 : quizRight * quizPer;
+  const newQuiz = () => api.quizPractice().then((r) => { setQuizQs(r.questions); setQuizPer(r.bonus); setQuizIdx(0); setQuizRight(0); setQuizFb(null); }).catch(() => {});
+  useEffect(() => { newQuiz(); }, []);
+  const answer = (qid: string, choice: number) => {
+    const q = quizQs.find((x) => x.id === qid);
+    if (!q) return;
+    const correct = choice === q.answer;
+    correct ? sfx.ready() : sfx.error();
+    if (correct) setQuizRight((n) => n + 1);
+    setQuizIdx((i) => i + 1);
+    setQuizFb({ question_id: q.id, choice, answer: q.answer, correct, explain: q.explain, bonus: correct ? quizPer : 0 });
+  };
   const joinClass = (code: string) => api.getClass(code.trim().toUpperCase()).then((c) => {
     setCls(c); setClsMsg(""); setPicks([]);
     const m = missions.find((x) => x.slug === c.mission); if (m) setMission(m);
@@ -26,9 +47,9 @@ export function Practice({ components, onExit }: { components: Component[]; onEx
   useEffect(() => { api.missions().then((m) => { setMissions(m); setMission(m[0]); }); }, []);
   useEffect(() => {
     if (!mission) return;
-    const t = setTimeout(() => api.analyze(mission.slug, picks, cls?.code).then(setStats), 120);
+    const t = setTimeout(() => api.analyze(mission.slug, picks, cls?.code, bonus).then(setStats), 120);
     return () => clearTimeout(t);
-  }, [mission, picks, cls]);
+  }, [mission, picks, cls, bonus]);
 
   const pool = useMemo(() => {
     const p: Record<string, number> = {};
@@ -45,7 +66,7 @@ export function Practice({ components, onExit }: { components: Component[]; onEx
       <div className="launch-screen">
         {animDone
           ? <>
-              <Results rows={lanes} myResultWon={result.success} backLabel="Back to drafting board"
+              <Results rows={lanes} myResultWon={result.success} backLabel="Back to drafting board" destination={mission.destination}
                        onBack={() => { setResult(null); setAnimDone(false); refreshClass(); }} />
               {cls && <ClassBoard cls={cls} />}
             </>
@@ -86,8 +107,17 @@ export function Practice({ components, onExit }: { components: Component[]; onEx
         mission={mission} components={components} pool={pool} myPicks={picks} myStats={stats} ready={false}
         onPick={(id) => setPicks((p) => [...p, id])}
         onRelease={(id) => setPicks((p) => { const i = p.indexOf(id); return p.filter((_, j) => j !== i); })}
-        onReady={() => api.practiceLaunch(mission.slug, picks, cls?.code).then(setResult)}
+        onReady={() => api.practiceLaunch(mission.slug, picks, cls?.code, bonus).then(setResult)}
         readyLabel="TEST LAUNCH"
+        quiz={cls ? null : (
+          <>
+            <QuizPanel questions={quizQs} idx={quizIdx} correct={quizRight} bonus={bonus} perQuestion={quizPer}
+                       feedback={quizFb} onAnswer={(q, choice) => answer(q.id, choice)} onDismiss={() => setQuizFb(null)} />
+            {quizIdx >= quizQs.length && quizQs.length > 0 && !quizFb && (
+              <div className="center"><button className="link" onClick={newQuiz}>🔁 New set of challenges (resets the bonus)</button></div>
+            )}
+          </>
+        )}
       />
     </>
   );

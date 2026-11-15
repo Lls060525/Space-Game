@@ -12,6 +12,7 @@ urlpatterns = [
     path("leaderboard/", views.Leaderboard.as_view()),
     path("matches/mine/", views.MyMatches.as_view()),
     path("practice/", views.practice),
+    path("quiz/practice/", views.quiz_practice),
     path("rover/scores/", views.rover_scores),
     path("nasa/conditions/", views.nasa_conditions),
     path("validation/", views.validation),

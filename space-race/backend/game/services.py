@@ -13,7 +13,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from . import bot, nasa
+from . import bot, nasa, quiz
 from .models import Component, Match, Mission, PlayerStats, QueueEntry
 from .sim import analyze, default_env, simulate
 
@@ -105,6 +105,17 @@ def _bot_turn(match, st, finish=False):
         me["ready"] = True
 
 
+def _new_quiz():
+    return {"idx": 0, "correct": 0, "bonus": 0}
+
+
+def _mission_for(match, uid):
+    """Mission dict with this player's cost cap raised by the quiz bonuses they earned."""
+    m = match.mission.as_sim_dict()
+    m["budget"] = m["budget"] + (match.state["players"].get(str(uid), {}).get("quiz") or {}).get("bonus", 0)
+    return m
+
+
 def create_match(p1, p2, mission=None):
     mission = mission or random.choice(list(Mission.objects.all()))
     pool = {str(c.id): c.stock for c in Component.objects.all()}
@@ -116,9 +127,11 @@ def create_match(p1, p2, mission=None):
         phase="drafting",
         deadline=time.time() + settings.DRAFT_SECONDS,
         pool=pool,
+        # Mission Control challenges: same questions, same order for both players
+        quiz_order=[q["id"] for q in random.sample(quiz.QUESTIONS, quiz.QUIZ_PER_MATCH)],
         players={
-            str(p1.id): dict(username=p1.username, picks=[], ready=False),
-            str(p2.id): dict(username=p2.username, picks=[], ready=False),
+            str(p1.id): dict(username=p1.username, picks=[], ready=False, quiz=_new_quiz()),
+            str(p2.id): dict(username=p2.username, picks=[], ready=False, quiz=_new_quiz()),
         },
     )
     return Match.objects.create(mission=mission, player1=p1, player2=p2, state=state)
@@ -160,12 +173,12 @@ def apply_action(match_id, user, action: dict):
                 raise DraftError(f"Max {MAX_PER_CATEGORY[comp.category]} {comp.get_category_display()} parts.")
             if len(picks) >= MAX_PARTS:
                 raise DraftError("Spacecraft bus is full.")
-            mission_d = match.mission.as_sim_dict()
+            mission_d = _mission_for(match, user.id)
             env = st.get("env") or default_env(mission_d)
             after = analyze([p.as_sim_dict() for p in picks] + [comp.as_sim_dict()], mission_d, env)
             if after["budget_left"] < 0:
                 raise DraftError(f"That would put the full mission cost (${after['cost']:.0f}M incl. bus, "
-                                 f"reserves, ops) over the ${match.mission.budget}M cap.")
+                                 f"reserves, ops) over your ${mission_d['budget']:.0f}M cap.")
             st["pool"][cid] -= 1
             me["picks"].append(int(cid))
 
@@ -177,6 +190,25 @@ def apply_action(match_id, user, action: dict):
                 raise DraftError("You don't own that part.")
             me["picks"].remove(cid)
             st["pool"][str(cid)] += 1
+
+        elif kind == "quiz":
+            order = st.get("quiz_order") or []
+            q = me.setdefault("quiz", _new_quiz())
+            if q["idx"] >= len(order):
+                raise DraftError("No more Mission Control challenges this match.")
+            qid = order[q["idx"]]
+            if action.get("question_id") not in (None, qid):
+                raise DraftError("That question has already been answered.")
+            try:
+                choice = int(action.get("choice"))
+            except (TypeError, ValueError):
+                raise DraftError("Pick an answer.")
+            res = quiz.grade(qid, choice)
+            q["idx"] += 1
+            if res["correct"]:
+                q["correct"] += 1
+                q["bonus"] += res["bonus"]
+            q["last"] = res          # private: only sent to this player, stripped from public_state
 
         elif kind == "ready":
             me["ready"] = True
@@ -213,10 +245,17 @@ def public_state(match):
     env = match.state.get("env") or default_env(mission)
     lvs = launch_catalog()
     players = {}
+    order = match.state.get("quiz_order") or []
     for uid, p in match.state["players"].items():
         parts = [c.as_sim_dict() for c in _components_by_id(p["picks"])]
-        players[uid] = dict(p, stats=analyze(parts, mission, env, lvs))
+        qz = p.get("quiz") or _new_quiz()
+        public_quiz = {k: qz.get(k, 0) for k in ("idx", "correct", "bonus")}
+        public_quiz["total"] = len(order)
+        players[uid] = dict({k: v for k, v in p.items() if k != "quiz"}, quiz=public_quiz,
+                            stats=analyze(parts, _mission_for(match, uid), env, lvs))
     return dict(
+        quiz=[quiz.public(quiz.BY_ID[i]) for i in order if i in quiz.BY_ID],
+        quiz_bonus=quiz.QUIZ_BONUS,
         env=nasa.env_summary(env),
         nasa=match.state.get("nasa"),
         match_id=str(match.id),
@@ -240,7 +279,7 @@ def _launch(match):
     for uid, p in match.state["players"].items():
         parts = [c.as_sim_dict() for c in _components_by_id(p["picks"])]
         # same seed for both players: identical dice, only engineering differs
-        results[uid] = simulate(parts, mission, seed=f"{match.seed}", env=env)
+        results[uid] = simulate(parts, _mission_for(match, uid), seed=f"{match.seed}", env=env)
         results[uid]["username"] = p["username"]
 
     u1, u2 = str(match.player1_id), str(match.player2_id)

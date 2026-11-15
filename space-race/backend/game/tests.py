@@ -197,3 +197,16 @@ class NasaEnvTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuizTests(unittest.TestCase):
+    def test_bank_is_well_formed(self):
+        from .quiz import QUESTIONS, grade, public
+        ids = [q["id"] for q in QUESTIONS]
+        self.assertEqual(len(ids), len(set(ids)))
+        for q in QUESTIONS:
+            self.assertEqual(len(q["options"]), 4)
+            self.assertIn(q["answer"], range(4))
+            self.assertNotIn("answer", public(q))
+            self.assertTrue(grade(q["id"], q["answer"])["correct"])
+            self.assertFalse(grade(q["id"], (q["answer"] + 1) % 4)["correct"])

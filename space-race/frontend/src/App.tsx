@@ -21,6 +21,15 @@ export default function App() {
 
   if (!user) return <Login onLogin={setUser} />;
 
+  // the main menu is a full-screen experience with its own HUD
+  if (screen.name === "lobby") {
+    return (
+      <Lobby me={user} onMatch={(id) => setScreen({ name: "match", id })} onPractice={() => setScreen({ name: "practice" })}
+             onRover={() => setScreen({ name: "rover" })} onScience={() => setScreen({ name: "science" })}
+             onLogout={() => { session.clear(); setUser(null); }} muted={muted} onToggleMute={() => setMuted(sfx.toggleMute())} />
+    );
+  }
+
   return (
     <div className="app">
       <nav className="top">
@@ -29,10 +38,6 @@ export default function App() {
         <span className="muted">{user.username}</span>
         <button className="link" onClick={() => { session.clear(); setUser(null); }}>Log out</button>
       </nav>
-      {screen.name === "lobby" && (
-        <Lobby me={user} onMatch={(id) => setScreen({ name: "match", id })} onPractice={() => setScreen({ name: "practice" })}
-               onRover={() => setScreen({ name: "rover" })} onScience={() => setScreen({ name: "science" })} />
-      )}
       {screen.name === "match" && components.length > 0 && (
         <MatchScreen key={screen.id} matchId={screen.id} me={user} components={components}
                      onExit={() => setScreen({ name: "lobby" })} />

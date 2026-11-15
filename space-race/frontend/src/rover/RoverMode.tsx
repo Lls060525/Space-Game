@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "../lib/api";
+import { api, session } from "../lib/api";
 import { sfx } from "../lib/sfx";
 import {
   DEFAULT_BUILD, roverStats, siteTime, sunElevation, type Build, type LiveSun, type RoverPlanet, type RoverSite,
 } from "./parts";
+import { roverHistory } from "../lib/history";
+import { HistoryCard } from "../components/HistoryCard";
+import { ShareCard } from "../components/ShareCard";
 import { RoverDrive, type DriveResult } from "./RoverDrive";
 import { RoverGarage } from "./RoverGarage";
 
@@ -79,6 +82,7 @@ export function RoverMode({ onExit }: { onExit: () => void }) {
             </dl>
             {result.lostCargo > 0 && <p className="muted small">Tip: science only counts when its data reaches Earth. A High-Gain Antenna sends it from anywhere while Earth is above the horizon; otherwise drive back to the lander relay.</p>}
             {!stats.cooling && planet === "Venus" && <p className="muted small">Tip: Venus needs a Cooling Loop.</p>}
+            {roverHistory(result.reason, result.lostCargo, planet, result.maxAir).map((h) => <HistoryCard key={h.mission + h.year} h={h} />)}
           </div>
           <div className="result-card" style={{ borderColor: "var(--warn)" }}>
             <h3>🏆 {planet} leaderboard</h3>
@@ -90,6 +94,18 @@ export function RoverMode({ onExit }: { onExit: () => void }) {
             </table>
           </div>
         </div>
+        <ShareCard data={{
+          mode: "ROVER EXPEDITION", planet, good: result.survived, score: result.score, player: session.user?.username ?? "Rover pilot",
+          headline: result.survived ? `Survived ${planet} and banked ${result.banked} science` : result.reason,
+          text: `🚙 I drove ${(result.distance / 1000).toFixed(2)} km on ${planet}, collected ${result.collected} samples`
+            + `${result.legendary ? ` (${result.legendary} legendary!)` : ""} and scored ${result.score.toLocaleString()} in Rover Expedition. Can you beat it?`,
+          stats: [
+            { label: "Samples", value: String(result.collected) },
+            { label: "Legendary", value: String(result.legendary) },
+            { label: "Distance", value: `${(result.distance / 1000).toFixed(2)} km` },
+            { label: "Best air", value: `${result.maxAir}s` },
+          ],
+        }} />
         <div className="center row" style={{ justifyContent: "center" }}>
           <button className="primary big" onClick={() => { setRun((r) => r + 1); setPhase("drive"); }}>Drive again</button>
           <button className="big" onClick={() => setPhase("garage")}>Tune rover</button>

@@ -16,6 +16,7 @@ from .serializers import (ComponentSerializer, LeaderboardSerializer, MatchHisto
                           MissionSerializer)
 from . import nasa
 from .services import launch_catalog, live_env
+from .quiz import QUESTIONS, QUIZ_BONUS, QUIZ_PER_MATCH
 from .sim import analyze, launch_options, launch_price_range, simulate
 
 
@@ -118,6 +119,11 @@ def practice(request):
     comps = Component.objects.in_bulk(set(ids))
     parts = [comps[i].as_sim_dict() for i in ids if i in comps]
     m = mission.as_sim_dict()
+    if not challenge:   # quiz bonus in solo practice (class challenges stay identical for everyone)
+        try:
+            m["budget"] += max(0, min(int(request.data.get("bonus_budget") or 0), QUIZ_BONUS * QUIZ_PER_MATCH))
+        except (TypeError, ValueError):
+            pass
     env = challenge.env if challenge and challenge.env else live_env(m)[0]
     if request.data.get("launch"):
         # class mode: everyone gets the same dice, so the leaderboard measures engineering only
@@ -232,3 +238,12 @@ def rover_scores(request):
     for row in RoverScore.objects.filter(planet=planet).select_related("user").order_by("-score")[:200]:
         best.setdefault(row.user_id, {"username": row.user.username, "score": row.score, "samples": row.samples})
     return Response(list(best.values())[:10])
+
+
+@api_view(["GET"])
+@permission_classes([permissions.AllowAny])
+def quiz_practice(request):
+    """Solo practice: random questions WITH answers (graded in the browser; no stakes)."""
+    import random
+    n = max(1, min(int(request.query_params.get("n", QUIZ_PER_MATCH)), len(QUESTIONS)))
+    return Response({"bonus": QUIZ_BONUS, "questions": random.sample(QUESTIONS, n)})

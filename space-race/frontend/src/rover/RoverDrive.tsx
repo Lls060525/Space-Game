@@ -40,6 +40,10 @@ export function RoverDrive({ planet, build, onEnd, live, activity = 1.5, site, o
   const [pops, setPops] = useState<Pop[]>([]);
   const [banner, setBanner] = useState<{ text: string; tone: string } | null>(null);
   const [shake, setShake] = useState(false);
+  // touch controls: on-screen buttons write into the same key set the keyboard uses
+  const touchKeys = useRef<Set<string> | null>(null);
+  const [touch, setTouch] = useState(() =>
+    typeof window !== "undefined" && (window.matchMedia?.("(pointer: coarse)").matches || "ontouchstart" in window));
 
   useEffect(() => {
     const el = host.current!;
@@ -173,6 +177,7 @@ export function RoverDrive({ planet, build, onEnd, live, activity = 1.5, site, o
 
     /* ---------------- input ---------------- */
     const keys = new Set<string>();
+    touchKeys.current = keys;
     const onDown = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
       if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
@@ -681,7 +686,54 @@ export function RoverDrive({ planet, build, onEnd, live, activity = 1.5, site, o
       {banner && <div className={`rv-banner ${banner.tone}`}>{banner.text}</div>}
       <div className="rv-pops">{pops.map((p) => <div key={p.id} className={`rv-pop ${p.big ? "big" : ""}`} style={{ color: p.color }}>{p.text}</div>)}</div>
       <button className="rv-abort" onClick={() => abortRef.current()}>End mission</button>
-      <div className="rv-help small">W/S drive · A/D steer · SHIFT boost · SPACE jets · R unstuck</div>
+      {!touch && <div className="rv-help small">W/S drive · A/D steer · SHIFT boost · SPACE jets · R unstuck</div>}
+      <button className="rv-touch-toggle" onClick={() => setTouch((t) => !t)} title="On-screen controls">🎮</button>
+      {touch && <TouchPad keys={touchKeys} jets={!!S0.jets} />}
+    </div>
+  );
+}
+
+
+/* ---------------- on-screen controls for phones and tablets ---------------- */
+type KeyRef = { current: Set<string> | null };
+function PadButton({ keys, k, label, className = "", hold = true }:
+  { keys: KeyRef; k: string; label: string; className?: string; hold?: boolean }) {
+  const [down, setDown] = useState(false);
+  const press = (e: { preventDefault(): void; currentTarget: Element; pointerId: number }) => {
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    keys.current?.add(k);
+    setDown(true);
+    navigator.vibrate?.(8);
+    if (!hold) setTimeout(() => { setDown(false); }, 120);   // taps (reset) are consumed by the game loop
+  };
+  const release = () => { if (hold) keys.current?.delete(k); setDown(false); };
+  return (
+    <button className={`pad-btn ${className} ${down ? "down" : ""}`} onPointerDown={press} onPointerUp={release}
+            onPointerCancel={release} onLostPointerCapture={release} onContextMenu={(e) => e.preventDefault()}>
+      {label}
+    </button>
+  );
+}
+
+function TouchPad({ keys, jets }: { keys: KeyRef; jets: boolean }) {
+  return (
+    <div className="touch-pad" onContextMenu={(e) => e.preventDefault()}>
+      <div className="pad-left">
+        <PadButton keys={keys} k="a" label="◀" />
+        <PadButton keys={keys} k="d" label="▶" />
+      </div>
+      <div className="pad-right">
+        <div className="pad-col">
+          <PadButton keys={keys} k="r" label="↺" className="small" hold={false} />
+          {jets && <PadButton keys={keys} k=" " label="JUMP" className="jump" />}
+          <PadButton keys={keys} k="shift" label="BOOST" className="boost" />
+        </div>
+        <div className="pad-col">
+          <PadButton keys={keys} k="w" label="▲" className="gas" />
+          <PadButton keys={keys} k="s" label="▼" className="rev" />
+        </div>
+      </div>
     </div>
   );
 }

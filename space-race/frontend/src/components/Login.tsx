@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, session } from "../lib/api";
 import type { User } from "../lib/types";
+import { SpaceBackdrop } from "./SpaceBackdrop";
 
 export function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [username, setUsername] = useState("");
@@ -20,10 +21,16 @@ export function Login({ onLogin }: { onLogin: (u: User) => void }) {
   }
 
   return (
-    <div className="login">
-      <h1>SPACE RACE</h1>
+    <div className="login-screen">
+      <SpaceBackdrop />
+      <div className="menu-vignette" />
+      <div className="menu-scan" />
+      <div className="login">
+      <div className="eyebrow-holo">NASA SPACE APPS 2026 · SPACE MISSION DESIGN GAME</div>
+      <h1 className="glitch" data-text="THE SPACE RACE">THE SPACE RACE</h1>
       <p className="tagline">Draft a spacecraft. Beat your rival to the science.</p>
-      <div className="panel">
+      <div className="panel holo login-card">
+        <div className="holo-title">🔐 IDENTIFY, ENGINEER</div>
         <input placeholder="Callsign" value={username} onChange={(e) => setUsername(e.target.value)} />
         <input placeholder="Password (optional for guest)" type="password" value={password}
                onChange={(e) => setPassword(e.target.value)} />
@@ -33,6 +40,7 @@ export function Login({ onLogin }: { onLogin: (u: User) => void }) {
           <button disabled={busy || !password} onClick={() => run(() => api.register(username, password))}>Register</button>
         </div>
         {error && <div className="error">{error}</div>}
+      </div>
       </div>
     </div>
   );

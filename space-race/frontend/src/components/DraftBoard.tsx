@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Category, Component, Mission, NasaSummary, Stats } from "../lib/types";
 import { sfx } from "../lib/sfx";
 import { Hangar3D } from "./Hangar3D";
@@ -58,6 +58,7 @@ interface Props {
   onPick: (id: number) => void;
   onRelease: (id: number) => void;
   onReady: () => void;
+  quiz?: ReactNode;
   onUnready?: () => void;
   onTimeout?: () => void;
   readyLabel?: string;
@@ -122,6 +123,7 @@ export function DraftBoard(p: Props) {
         </div>
       </header>
 
+      {p.quiz}
       <div className="center" style={{ margin: "8px 0" }}>
         <button className={showEq ? "on" : ""} onClick={() => setShowEq((v) => !v)}>
           📐 {showEq ? "Hide" : "Show"} the live equations (learn the real physics)
