@@ -6,7 +6,7 @@
 
 **NASA Space Apps Challenge 2026 · Challenge: _Space Mission Design Game_ · Team GENESIS Z**
 
-[**▶ Play now**](https://space-game-ten-rho.vercel.app) · [🎬 Project Demonstration Video](https://youtu.be/q7to-Z4LpRY) · [🎥 Project and Product Video](PROJECT_5MIN_LINK) · [📦 Slide](https://drive.google.com/drive/folders/14oGTtrNy9u8_9Th-k-s1Kd8_8Kw7KYnA?usp=drive_link)
+[**▶ Play now**](https://space-game-ten-rho.vercel.app) · [🎬 Project Demonstration Video](https://youtu.be/q7to-Z4LpRY) · [🎥 Project and Product Video](https://www.youtube.com/watch?v=K0ZX40YDZdQ)) · [📦 Slide](https://drive.google.com/drive/folders/14oGTtrNy9u8_9Th-k-s1Kd8_8Kw7KYnA?usp=drive_link)
 
 [🔗 Google Drive](https://drive.google.com/drive/folders/1oN3gXRLlz-W0hhuyjs2YZ-tLWFNC5zLY?usp=drive_link)
 
