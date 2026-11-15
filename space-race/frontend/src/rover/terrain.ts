@@ -50,6 +50,7 @@ export class Terrain {
   private seed: number;
   private prof: (typeof PROFILE)[RoverPlanet];
   private h0 = 0;
+  private pads: { x: number; z: number; h: number }[] = [];
 
   constructor(readonly planet: RoverPlanet) {
     this.seed = PLANETS[planet].seed;
@@ -57,7 +58,10 @@ export class Terrain {
     const r = rng(this.seed);
     for (let i = 0; i < this.prof.craters; i++) {
       const ang = r() * Math.PI * 2, dist = 50 + r() * 220;
-      this.craters.push({ x: Math.cos(ang) * dist, z: Math.sin(ang) * dist, r: 10 + r() * 28, depth: this.prof.depth * (0.5 + r()) });
+      const radius = 10 + r() * 28;
+      // depth/radius <= 0.22 keeps walls under ~26 deg, about what real rovers can climb (fresh craters are ~0.2 deep/diameter)
+      const depth = Math.min(this.prof.depth * (0.5 + r()), 0.22 * radius);
+      this.craters.push({ x: Math.cos(ang) * dist, z: Math.sin(ang) * dist, r: radius, depth });
     }
     this.h0 = this.raw(0, 0);
     // samples
@@ -76,6 +80,15 @@ export class Terrain {
       const ang = r() * Math.PI * 2, d = 22 + r() * 250;
       this.boulders.push({ x: Math.cos(ang) * d, z: Math.sin(ang) * d, r: 1.2 + r() * 2.2 });
     }
+    // every sample sits on a small flat outcrop (5 m) so a drill can stop and hold position
+    this.pads = this.samples.map((s) => ({ x: s.x, z: s.z, h: this.raw(s.x, s.z) }));
+    // keep every sample reachable: push boulders that sit on or next to a sample out of the way
+    for (const b of this.boulders) {
+      for (const s of this.samples) {
+        const dx = b.x - s.x, dz = b.z - s.z, dd = Math.hypot(dx, dz) || 0.01, min = b.r + 4;
+        if (dd < min) { b.x = s.x + (dx / dd) * min; b.z = s.z + (dz / dd) * min; }
+      }
+    }
   }
 
   private raw(x: number, z: number) {
@@ -86,7 +99,7 @@ export class Terrain {
       const d = Math.hypot(x - c.x, z - c.z) / c.r;
       if (d < 1.6) {
         if (d < 1) h -= c.depth * (1 - d * d);
-        h += c.depth * 0.38 * Math.exp(-(((d - 1) / 0.17) ** 2));
+        h += c.depth * 0.2 * Math.exp(-(((d - 1) / 0.3) ** 2));
       }
     }
     return h;
@@ -94,11 +107,20 @@ export class Terrain {
 
   height(x: number, z: number) {
     const d = Math.hypot(x, z);
-    const raw = this.raw(x, z);
-    if (d > 40) return raw;
-    const t = Math.max(0, Math.min(1, (d - 14) / 26));
-    const s = t * t * (3 - 2 * t);
-    return this.h0 + (raw - this.h0) * s;    // flat landing zone
+    let h = this.raw(x, z);
+    if (d <= 40) {
+      const t = Math.max(0, Math.min(1, (d - 14) / 26));
+      const s = t * t * (3 - 2 * t);
+      h = this.h0 + (h - this.h0) * s;       // flat landing zone
+    }
+    for (const p of this.pads) {
+      const dp = Math.abs(x - p.x) + Math.abs(z - p.z) < 22 ? Math.hypot(x - p.x, z - p.z) : 99;
+      if (dp < 15) {
+        const t = Math.max(0, Math.min(1, (dp - 3) / 12));   // gentle 12 m ramp onto the outcrop
+        h = p.h + (h - p.h) * t * t * (3 - 2 * t);
+      }
+    }
+    return h;
   }
 
   normal(x: number, z: number, out = new THREE.Vector3()) {

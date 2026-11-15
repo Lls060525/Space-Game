@@ -13,8 +13,9 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from . import bot, nasa
 from .models import Component, Match, Mission, PlayerStats, QueueEntry
-from .sim import analyze, simulate
+from .sim import analyze, default_env, simulate
 
 MAX_PER_CATEGORY = {"launch": 1, "power": 3, "battery": 3, "instrument": 4, "storage": 2,
                     "comms": 2, "propulsion": 2, "thermal": 3}
@@ -46,10 +47,72 @@ def leave_queue(user):
     QueueEntry.objects.filter(user=user).delete()
 
 
+def launch_catalog():
+    return [c.as_sim_dict() for c in Component.objects.filter(category="launch")]
+
+
+def live_env(mission_dict):
+    """(env, nasa summary) from today's NASA data. Never blocks on the network, never raises."""
+    try:
+        cond = nasa.get_conditions(block=False)
+        return nasa.mission_env(mission_dict, cond), nasa.public_summary(cond)
+    except Exception:
+        return default_env(mission_dict), None
+
+
+def bot_user():
+    from django.contrib.auth.models import User
+    u, created = User.objects.get_or_create(username=bot.BOT_USERNAME)
+    if created:
+        u.set_unusable_password()
+        u.save()
+    return u
+
+
+def create_bot_match(user, mission=None):
+    return create_match(user, bot_user(), mission)
+
+
+def _bot_uid(match):
+    for uid, p in match.state["players"].items():
+        if p["username"] == bot.BOT_USERNAME:
+            return uid
+    return None
+
+
+def _bot_turn(match, st, finish=False):
+    """The AI picks one part per human action; on `finish` it completes its build and readies."""
+    uid = _bot_uid(match)
+    if uid is None:
+        return
+    me = st["players"][uid]
+    if me["ready"]:
+        return
+    mission = match.mission.as_sim_dict()
+    env = st.get("env") or default_env(mission)
+    comps = {c.id: c for c in Component.objects.all()}
+    rng = random.Random(f"{match.seed}:{len(me['picks'])}")
+    for _ in range(MAX_PARTS if finish else 1):
+        mine = [comps[i].as_sim_dict() for i in me["picks"] if i in comps]
+        pool = [dict(comps[int(cid)].as_sim_dict(), id=int(cid), left=left)
+                for cid, left in st["pool"].items() if int(cid) in comps]
+        choice = bot.choose_pick(mine, pool, mission, env, MAX_PER_CATEGORY, MAX_PARTS, rng)
+        if choice is None:
+            break
+        st["pool"][str(choice["id"])] -= 1
+        me["picks"].append(choice["id"])
+    if finish:
+        me["ready"] = True
+
+
 def create_match(p1, p2, mission=None):
     mission = mission or random.choice(list(Mission.objects.all()))
     pool = {str(c.id): c.stock for c in Component.objects.all()}
+    # Snapshot today's NASA data into the match: both players (and the launch) use identical numbers.
+    env, nasa_summary = live_env(mission.as_sim_dict())
     state = dict(
+        env=env,
+        nasa=nasa_summary,
         phase="drafting",
         deadline=time.time() + settings.DRAFT_SECONDS,
         pool=pool,
@@ -97,8 +160,12 @@ def apply_action(match_id, user, action: dict):
                 raise DraftError(f"Max {MAX_PER_CATEGORY[comp.category]} {comp.get_category_display()} parts.")
             if len(picks) >= MAX_PARTS:
                 raise DraftError("Spacecraft bus is full.")
-            if sum(p.cost for p in picks) + comp.cost > match.mission.budget:
-                raise DraftError("That would put you over budget.")
+            mission_d = match.mission.as_sim_dict()
+            env = st.get("env") or default_env(mission_d)
+            after = analyze([p.as_sim_dict() for p in picks] + [comp.as_sim_dict()], mission_d, env)
+            if after["budget_left"] < 0:
+                raise DraftError(f"That would put the full mission cost (${after['cost']:.0f}M incl. bus, "
+                                 f"reserves, ops) over the ${match.mission.budget}M cap.")
             st["pool"][cid] -= 1
             me["picks"].append(int(cid))
 
@@ -123,6 +190,13 @@ def apply_action(match_id, user, action: dict):
         else:
             raise DraftError(f"Unknown action {kind!r}")
 
+        # AI rival: one pick per human move; completes its build when you ready up or time runs out
+        if _bot_uid(match) and str(user.id) != _bot_uid(match):
+            if kind in ("pick", "release"):
+                _bot_turn(match, st)
+            elif kind == "ready" or time.time() >= st["deadline"]:
+                _bot_turn(match, st, finish=True)
+
         all_ready = all(p["ready"] for p in st["players"].values())
         if all_ready or time.time() >= st["deadline"]:
             _launch(match)
@@ -136,11 +210,15 @@ def apply_action(match_id, user, action: dict):
 def public_state(match):
     """Everything the clients need to render the board (both builds are visible: it's a draft)."""
     mission = match.mission.as_sim_dict()
+    env = match.state.get("env") or default_env(mission)
+    lvs = launch_catalog()
     players = {}
     for uid, p in match.state["players"].items():
         parts = [c.as_sim_dict() for c in _components_by_id(p["picks"])]
-        players[uid] = dict(p, stats=analyze(parts, mission))
+        players[uid] = dict(p, stats=analyze(parts, mission, env, lvs))
     return dict(
+        env=nasa.env_summary(env),
+        nasa=match.state.get("nasa"),
         match_id=str(match.id),
         status=match.status,
         phase=match.state.get("phase"),
@@ -157,11 +235,12 @@ def public_state(match):
 # --------------------------------------------------------------------------
 def _launch(match):
     mission = match.mission.as_sim_dict()
+    env = match.state.get("env") or default_env(mission)
     results = {}
     for uid, p in match.state["players"].items():
         parts = [c.as_sim_dict() for c in _components_by_id(p["picks"])]
         # same seed for both players: identical dice, only engineering differs
-        results[uid] = simulate(parts, mission, seed=f"{match.seed}")
+        results[uid] = simulate(parts, mission, seed=f"{match.seed}", env=env)
         results[uid]["username"] = p["username"]
 
     u1, u2 = str(match.player1_id), str(match.player2_id)

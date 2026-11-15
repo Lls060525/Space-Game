@@ -109,6 +109,7 @@ export function MatchScreen({ matchId, me, components, onExit }:
         pool={state.pool}
         myPicks={mine.picks}
         myStats={mine.stats}
+        nasa={state.nasa}
         ready={mine.ready}
         opponent={{ ...rival, online: rivalOnline, feed }}
         deadline={state.deadline - clockOffset.current}

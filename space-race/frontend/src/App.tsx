@@ -7,8 +7,9 @@ import { Login } from "./components/Login";
 import { MatchScreen } from "./components/MatchScreen";
 import { Practice } from "./components/Practice";
 import { RoverMode } from "./rover/RoverMode";
+import { SciencePage } from "./components/SciencePage";
 
-type Screen = { name: "lobby" } | { name: "match"; id: string } | { name: "practice" } | { name: "rover" };
+type Screen = { name: "lobby" } | { name: "match"; id: string } | { name: "practice" } | { name: "rover" } | { name: "science" };
 
 export default function App() {
   const [user, setUser] = useState<User | null>(session.user);
@@ -30,13 +31,14 @@ export default function App() {
       </nav>
       {screen.name === "lobby" && (
         <Lobby me={user} onMatch={(id) => setScreen({ name: "match", id })} onPractice={() => setScreen({ name: "practice" })}
-               onRover={() => setScreen({ name: "rover" })} />
+               onRover={() => setScreen({ name: "rover" })} onScience={() => setScreen({ name: "science" })} />
       )}
       {screen.name === "match" && components.length > 0 && (
         <MatchScreen key={screen.id} matchId={screen.id} me={user} components={components}
                      onExit={() => setScreen({ name: "lobby" })} />
       )}
       {screen.name === "rover" && <RoverMode onExit={() => setScreen({ name: "lobby" })} />}
+      {screen.name === "science" && <SciencePage onExit={() => setScreen({ name: "lobby" })} />}
       {screen.name === "practice" && components.length > 0 && (
         <Practice components={components} onExit={() => setScreen({ name: "lobby" })} />
       )}

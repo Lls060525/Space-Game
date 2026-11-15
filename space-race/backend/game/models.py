@@ -20,7 +20,7 @@ class Component(models.Model):
     name = models.CharField(max_length=120)
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, db_index=True)
     description = models.TextField(blank=True)
-    cost = models.PositiveIntegerField(help_text="$M")
+    cost = models.FloatField(help_text="$M (flight-unit price; launch vehicles: launch service price)")
     mass = models.FloatField(help_text="kg")
     power_draw = models.FloatField(default=0, help_text="W while operating")
     reliability = models.FloatField(default=0.98)
@@ -117,6 +117,32 @@ class RoverScore(models.Model):
     planet = models.CharField(max_length=12, db_index=True)
     score = models.IntegerField()
     samples = models.PositiveIntegerField(default=0)
+    build = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-score"]
+
+
+class ClassChallenge(models.Model):
+    """Classroom mode: a teacher shares a code; every student flies the same mission, same NASA snapshot, same dice."""
+    code = models.CharField(max_length=8, unique=True)
+    title = models.CharField(max_length=80, blank=True)
+    mission = models.ForeignKey(Mission, on_delete=models.PROTECT)
+    seed = models.CharField(max_length=36, default=uuid.uuid4)
+    env = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class ClassEntry(models.Model):
+    challenge = models.ForeignKey(ClassChallenge, on_delete=models.CASCADE, related_name="entries")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    score = models.IntegerField()
+    success = models.BooleanField(default=False)
+    science_pct = models.FloatField(default=0)
+    cost = models.FloatField(default=0)
     build = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

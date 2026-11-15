@@ -6,3 +6,6 @@ __pycache__/
 venv/
 db.sqlite3
 .env
+
+# NASA live-data cache (JPL Horizons + DONKI)
+backend/.nasa_cache.json

@@ -13,4 +13,8 @@ urlpatterns = [
     path("matches/mine/", views.MyMatches.as_view()),
     path("practice/", views.practice),
     path("rover/scores/", views.rover_scores),
+    path("nasa/conditions/", views.nasa_conditions),
+    path("validation/", views.validation),
+    path("class/", views.class_create),
+    path("class/<str:code>/", views.class_detail),
 ]

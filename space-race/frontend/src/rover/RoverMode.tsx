@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { sfx } from "../lib/sfx";
-import { DEFAULT_BUILD, roverStats, type Build, type RoverPlanet } from "./parts";
+import {
+  DEFAULT_BUILD, roverStats, siteTime, sunElevation, type Build, type LiveSun, type RoverPlanet, type RoverSite,
+} from "./parts";
 import { RoverDrive, type DriveResult } from "./RoverDrive";
 import { RoverGarage } from "./RoverGarage";
 
@@ -20,7 +22,24 @@ export function RoverMode({ onExit }: { onExit: () => void }) {
   const [board, setBoard] = useState<Board>([]);
   const [run, setRun] = useState(0);
   const best = Number(localStorage.getItem(bestKey(planet)) ?? 0);
-  const stats = useMemo(() => roverStats(build, planet), [build, planet]);
+  const [live, setLive] = useState<LiveSun | undefined>();
+  const [activity, setActivity] = useState(1.5);
+  const [wxNote, setWxNote] = useState<string>();
+  const [sites, setSites] = useState<Partial<Record<RoverPlanet, RoverSite>>>({});
+  const [schedule, setSchedule] = useState<"now" | "morning">("now");
+  const site = sites[planet];
+  const nowT = siteTime(site);
+  const offsetH = schedule === "morning" && nowT !== null ? (((9 - nowT) % 24) + 24) % 24 : 0;
+  useEffect(() => {
+    api.nasa().then((c) => {
+      if (c.live) setLive(c.planets);
+      if (c.sites) setSites(c.sites);
+      setActivity(c.space_weather.activity_index);
+      setWxNote(`Space weather (NASA DONKI, 30 days): ${c.space_weather.level}, ${c.space_weather.flares.X} X / ${c.space_weather.flares.M} M flares, ${c.space_weather.sep_events} SEP events.`);
+    }).catch(() => {});
+  }, []);
+  const stats = useMemo(() => roverStats(build, planet, live, sunElevation(site, siteTime(site, 0, offsetH))),
+    [build, planet, live, site, offsetH]);
 
   useEffect(() => { localStorage.setItem("spacerace.rover.build", JSON.stringify(build)); }, [build]);
   useEffect(() => { api.roverScores(planet).then(setBoard).catch(() => setBoard([])); }, [planet, phase]);
@@ -35,7 +54,8 @@ export function RoverMode({ onExit }: { onExit: () => void }) {
   };
 
   if (phase === "drive") {
-    return <RoverDrive key={run} planet={planet} build={build} onEnd={finish} />;
+    return <RoverDrive key={run} planet={planet} build={build} onEnd={finish} live={live} activity={activity}
+                       site={site} offsetH={offsetH} />;
   }
 
   if (phase === "result" && result) {
@@ -57,7 +77,7 @@ export function RoverMode({ onExit }: { onExit: () => void }) {
               <dt>Longest air time</dt><dd>{result.maxAir}s</dd>
               <dt>Survival bonus</dt><dd>{result.survived ? "yes" : "no"}</dd>
             </dl>
-            {result.lostCargo > 0 && <p className="muted small">Tip: a High-Gain Antenna uplinks samples instantly, so nothing is lost.</p>}
+            {result.lostCargo > 0 && <p className="muted small">Tip: science only counts when its data reaches Earth. A High-Gain Antenna sends it from anywhere while Earth is above the horizon; otherwise drive back to the lander relay.</p>}
             {!stats.cooling && planet === "Venus" && <p className="muted small">Tip: Venus needs a Cooling Loop.</p>}
           </div>
           <div className="result-card" style={{ borderColor: "var(--warn)" }}>
@@ -85,7 +105,8 @@ export function RoverMode({ onExit }: { onExit: () => void }) {
         <button className="link" onClick={onExit}>← Lobby</button>
         <h2 style={{ margin: 0 }}>🚙 Rover Expedition</h2>
       </div>
-      <RoverGarage planet={planet} setPlanet={setPlanet} build={build} setBuild={setBuild} best={best}
+      <RoverGarage planet={planet} setPlanet={setPlanet} build={build} setBuild={setBuild} best={best} live={live} nasaNote={wxNote}
+                   site={site} offsetH={offsetH} schedule={schedule} setSchedule={setSchedule}
                    onDeploy={() => { setRun((r) => r + 1); setPhase("drive"); }} />
     </>
   );

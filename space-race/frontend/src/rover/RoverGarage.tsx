@@ -4,8 +4,8 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { sfx } from "../lib/sfx";
 import { disposeObject } from "../three/models";
 import {
-  BUDGET, PLANETS, ROVER_PARTS, SINGLE, SLOT_LABEL, buildReady, roverStats,
-  type Build, type RoverPlanet, type Slot,
+  BUDGET, PLANETS, ROVER_PARTS, SINGLE, SLOT_LABEL, TIME_COMPRESSION, buildReady, fmtTime, roverStats, siteTime, sunElevation,
+  type Build, type LiveSun, type RoverPlanet, type RoverSite, type Slot,
 } from "./parts";
 import { buildRover } from "./roverModel";
 
@@ -77,9 +77,13 @@ function Bar({ label, value, max, text, bad }: { label: string; value: number; m
 
 const ORDER: Slot[] = ["chassis", "wheels", "motor", "battery", "power", "instrument", "extra"];
 
-export function RoverGarage({ planet, setPlanet, build, setBuild, onDeploy, best }:
-  { planet: RoverPlanet; setPlanet: (p: RoverPlanet) => void; build: Build; setBuild: (b: Build) => void; onDeploy: () => void; best: number }) {
-  const s = useMemo(() => roverStats(build, planet), [build, planet]);
+export function RoverGarage({ planet, setPlanet, build, setBuild, onDeploy, best, live, nasaNote, site, offsetH = 0, schedule, setSchedule }:
+  { planet: RoverPlanet; setPlanet: (p: RoverPlanet) => void; build: Build; setBuild: (b: Build) => void; onDeploy: () => void; best: number;
+    live?: LiveSun; nasaNote?: string; site?: RoverSite; offsetH?: number;
+    schedule?: "now" | "morning"; setSchedule?: (s: "now" | "morning") => void }) {
+  const lt = siteTime(site, 0, offsetH);
+  const el = sunElevation(site, lt);
+  const s = useMemo(() => roverStats(build, planet, live, el), [build, planet, live, el]);
   const ready = buildReady(s);
 
   const toggle = (id: string, slot: Slot) => {
@@ -90,7 +94,7 @@ export function RoverGarage({ planet, setPlanet, build, setBuild, onDeploy, best
       return;
     }
     const next = isSingle ? [...without, id] : [...build, id];
-    if (roverStats(next, planet).cost > BUDGET) { sfx.error(); return; }
+    if (roverStats(next, planet, live, el).cost > BUDGET) { sfx.error(); return; }
     sfx.pick();
     setBuild(next);
   };
@@ -136,15 +140,53 @@ export function RoverGarage({ planet, setPlanet, build, setBuild, onDeploy, best
           <h3>Your rover <span className="muted small">drag to rotate</span></h3>
           <RoverPreview build={build} />
           <div className={`budget ${s.cost > BUDGET ? "bad" : ""}`}>${BUDGET - s.cost}M left · {s.mass} kg</div>
+          <div className="live-sun small">
+            <span className={`live-dot ${s.live ? "on" : ""}`} /> {s.live ? "Live JPL Horizons" : "Nominal orbit"}: {planet} is{" "}
+            <b>{s.sunAU.toFixed(3)} AU</b> from the Sun → {Math.round(s.irradiance)} W/m² above the atmosphere,
+            {" "}{Math.round(s.irradiance * PLANETS[planet].transmission)} W/m² on the ground.
+            {nasaNote && <> {nasaNote}</>}
+          </div>
+          {site && (
+            <div className="live-sun small">
+              📍 <b>{site.name}</b> ({Math.abs(site.lat).toFixed(2)}°{site.lat >= 0 ? "N" : "S"}, {site.lon_e.toFixed(2)}°E)
+              {lt !== null ? <> · local solar time <b>{fmtTime(lt)}</b> · Sun {el!.toFixed(0)}° {el! < 0 ? "(night)" : "above the horizon"}
+                {" "}→ solar deck {Math.round(s.genW)} W of {Math.round(s.genNoonW)} W</> : <> · {site.source}</>}
+              {site.season && <> · {site.season} (Ls {site.ls_deg?.toFixed(0)}°), {site.dust_season ? "DUST-STORM SEASON" : "not dust-storm season"}</>}
+              {site.phase && <> · Moon phase: {site.phase}</>}
+              {setSchedule && lt !== null && (
+                <span className="row" style={{ marginLeft: 8, display: "inline-flex", gap: 4 }}>
+                  <button className={schedule === "now" ? "on" : ""} onClick={() => setSchedule("now")}>Drive now (real time)</button>
+                  <button className={schedule === "morning" ? "on" : ""} onClick={() => setSchedule("morning")}>Wait for 09:00 local</button>
+                </span>
+              )}
+            </div>
+          )}
           <div className="stats">
-            <Bar label="Top speed" value={s.topSpeed} max={30} text={`${(s.topSpeed * 3.6).toFixed(0)} km/h`} />
-            <Bar label="Acceleration" value={s.accel} max={14} text={`${s.accel.toFixed(1)} m/s²`} bad={s.accel < 2} />
-            <Bar label="Climb" value={s.climb} max={45} text={`${s.climb}°`} />
+            <Bar label={`Weight on ${planet}`} value={s.weightN} max={4500}
+                 text={`${Math.round(s.weightN)} N (${Math.round(s.earthWeightN)} N on Earth)`} />
+            <Bar label="Ground pressure" value={s.groundKPa} max={40} text={`${s.groundKPa.toFixed(1)} kPa · Crr ${s.crr.toFixed(2)}`} bad={s.sinkage > 0.3} />
+            <Bar label="Top speed (flat)" value={s.topSpeed} max={12} text={`${(s.topSpeed * 3.6).toFixed(1)} km/h`} />
+            <Bar label="Acceleration" value={s.accel} max={5} text={`${s.accel.toFixed(2)} m/s²`} bad={s.accel < 0.3} />
+            <Bar label="Max slope" value={s.climb} max={45} text={`${s.climb}°`} bad={s.climb < 15} />
             <Bar label="Durability" value={s.hp} max={170} text={`${s.hp} HP`} />
             <Bar label="Endurance (full throttle)" value={Math.min(s.endurance, 240)} max={240}
                  text={s.endurance === Infinity ? "∞ (power-positive!)" : `${Math.round(s.endurance)} s`} bad={s.endurance < 60} />
-            <Bar label="Recharge" value={s.genW} max={200} text={`${s.genW.toFixed(0)} W`} />
-            <Bar label="Radar range" value={s.radar} max={90} text={`${s.radar} m`} />
+            <Bar label="Recharge (now)" value={s.genW} max={200} text={`${s.genW.toFixed(0)} W${s.heaterW ? ` · heaters −${s.heaterW} W` : ""}`} bad={s.night && s.heaterW > 0} />
+            <Bar label="Camera sight range" value={s.radar} max={90} text={`${s.radar} m${s.navcam ? " · AutoNav · samples ×1.25" : " (no navcams)"}`} bad={!s.navcam} />
+            <Bar label="Direct-to-Earth link" value={s.uplinkMBs} max={60}
+                 text={s.uplink ? `${s.uplinkMBs.toFixed(1)} MB/s at ${s.earthAU.toFixed(3)} AU · light-time ${s.lightS < 60 ? `${s.lightS.toFixed(1)} s` : `${(s.lightS / 60).toFixed(1)} min`}` : "none: lander relay only"}
+                 bad={!s.uplink} />
+            {s.jets && <Bar label="Jump-jet hops" value={s.hops} max={12} text={`${s.hops} × ${s.hopGasKg.toFixed(2)} kg gas`} bad={s.hops < 3} />}
+          </div>
+          <div className="mass-budget small">
+            <div className="muted">Mass budget</div>
+            {s.massRows.map((r) => (
+              <div key={r.label} className="mb-row">
+                <span>{r.label}</span>
+                <span className="mb-bar"><span style={{ width: `${r.pct}%` }} /></span>
+                <span className="mono">{r.kg} kg · {r.pct.toFixed(0)}%</span>
+              </div>
+            ))}
           </div>
           <ul className="warnings">
             {s.warnings.length === 0 && <li className="ok">Rover is go for landing.</li>}
@@ -157,6 +199,7 @@ export function RoverGarage({ planet, setPlanet, build, setBuild, onDeploy, best
           {best > 0 && <p className="muted small center">Your best on {planet}: <b>{best}</b></p>}
           <div className="controls-hint small muted">
             <b>Controls:</b> W/S or ↑/↓ drive · A/D or ←/→ steer · SHIFT boost · SPACE jump jets · R reset if stuck
+            <br />Physics: F = ma with real gravity, traction, rolling resistance, grade and drag. Energy runs {TIME_COMPRESSION}× faster than real time.
           </div>
         </section>
       </div>

@@ -44,6 +44,9 @@ class LobbyConsumer(AsyncJsonWebsocketConsumer):
                 for uid in (match.player1_id, match.player2_id):
                     await self.channel_layer.group_send(
                         user_group(uid), {"type": "match.found", "match_id": str(match.id)})
+        elif kind == "play_ai":
+            match = await database_sync_to_async(services.create_bot_match)(self.user)
+            await self.send_json({"type": "match_found", "match_id": str(match.id)})
         elif kind == "cancel":
             await database_sync_to_async(services.leave_queue)(self.user)
             await self.send_json({"type": "cancelled"})

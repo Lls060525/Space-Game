@@ -3,7 +3,12 @@ import * as THREE from "three";
 import { sfx } from "../lib/sfx";
 import { disposeObject, makeStars, planetTexture } from "../three/models";
 import { Particles } from "../three/particles";
-import { ENERGY_K, MISSION_SECONDS, PLANETS, partsOf, roverStats, type Build, type RoverPlanet } from "./parts";
+import {
+  CDA, ENERGY_K, G0, HOP_HEIGHT, JET_ISP, MISSION_SECONDS, MOTOR_EFF, NIGHT_HEATER_W, PLANETS, TIME_COMPRESSION,
+  DATA_MB, HGA_TX_W, NAVCAM_DATA, NAVCAM_VALUE, RELAY_RANGE,
+  earthElevation, fmtTime, partsOf, roverStats, siteTime, sunElevation, sunOnDeck,
+  type Build, type LiveSun, type RoverPlanet, type RoverSite,
+} from "./parts";
 import { buildRover } from "./roverModel";
 import { HALF, Terrain } from "./terrain";
 
@@ -15,13 +20,19 @@ export interface DriveResult {
 interface Hud {
   time: number; energy: number; hp: number; speed: number; carried: number; banked: number; collected: number;
   storm: boolean; drill: number; onPad: boolean; air: boolean; lowBattery: boolean; hot: boolean;
+  slip: boolean; slope: number; powerKW: number; force: number; gas: number;
+  localTime: number | null; sunEl: number | null; genW: number;
+  queueMB: number; inflight: number; earthUp: boolean; earthEl: number; tx: boolean; autonav: boolean;
+  sampleHint: string;
 }
 interface Pop { id: number; text: string; color: string; big?: boolean }
 
 const KIND_COLOR = { common: 0x4fd1ff, rare: 0xc084fc, legendary: 0xffd166 } as const;
 const LANDER_R = 8;
 
-export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; build: Build; onEnd: (r: DriveResult) => void }) {
+export function RoverDrive({ planet, build, onEnd, live, activity = 1.5, site, offsetH = 0 }:
+  { planet: RoverPlanet; build: Build; onEnd: (r: DriveResult) => void; live?: LiveSun; activity?: number;
+    site?: RoverSite; offsetH?: number }) {
   const host = useRef<HTMLDivElement>(null);
   const map = useRef<HTMLCanvasElement>(null);
   const abortRef = useRef<() => void>(() => {});
@@ -33,11 +44,15 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
   useEffect(() => {
     const el = host.current!;
     const P = PLANETS[planet];
-    const S = roverStats(build, planet);
-    const parts = partsOf(build);
-    const motorDraw = parts.find((p) => p.slot === "motor")?.draw ?? 0;
-    const hasLaser = parts.some((p) => p.scan);
+    const elAt = (driveS: number) => sunElevation(site, siteTime(site, driveS * TIME_COMPRESSION, offsetH));
+    const S = roverStats(build, planet, live, elAt(0));
+    const hasRtg = partsOf(build).some((p) => p.slot === "power" && !p.solar);
+    const stormSeason = site?.dust_season ?? true;     // real Mars season from the Mars24 solar longitude
+    const hasLaser = S.scan > 5;
     const g = P.gravity;
+    const m = S.mass, mEff = 1.05 * m;          // +5 % rotating inertia (wheels, gears)
+    const hopV = Math.sqrt(2 * g * HOP_HEIGHT);
+    const solarPowered = partsOf(build).some((p) => p.solar);
 
     /* ---------------- renderer / scene ---------------- */
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -139,7 +154,7 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
       }
       grp.position.set(s.x, H(s.x, s.z), s.z);
       scene.add(grp);
-      return { s, grp, gem, taken: false };
+      return { s, grp, gem, taken: false, beam: grp.children[1] as THREE.Object3D | undefined };
     });
 
     // rover
@@ -173,7 +188,11 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
       lastGround: H(0, LANDER_R + 3), energy: S.capacity, hp: S.hp, time: 0, carried: 0, banked: 0, collected: 0,
       legendary: 0, drill: 0, drillTarget: -1, jetT: 0, jumpCd: 0, deadT: 0, ended: false, storm: false,
       airT: 0, maxAir: 0, distance: 0, beepT: 0, shake: 0, laserT: 0, stormAnnounced: false, stormOver: false,
+      gas: S.gasKg, slip: false, slope: 0, pElec: 0, force: 0, sunEl: null as number | null, gen: 0,
+      sampleHint: "",
+      carriedMB: 0, inflight: [] as { at: number; value: number }[], tx: false, earthEl: 45, autonavT: 0, autonavMsgT: 0,
     };
+    const lightGameS = S.lightS / TIME_COMPRESSION;   // real light-time, compressed like everything else
     let popId = 0;
     const pop = (text: string, color: string, big = false) => {
       const id = ++popId;
@@ -197,8 +216,10 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
       if (st.ended) return;
       st.ended = true;
       engine?.stop();
-      const lost = S.uplink ? 0 : st.carried;
-      const banked = st.banked + (S.uplink ? st.carried : 0);
+      // data already on its way at light speed still arrives; data never sent is lost with the rover
+      const arriving = st.inflight.reduce((a, f) => a + f.value, 0);
+      const lost = st.carried;
+      const banked = st.banked + arriving;
       const score = Math.round(banked + (survived ? 50 : 0) + (survived ? Math.max(0, st.hp) * 0.3 : 0));
       if (!survived) sfx.explosion();
       announce(reason, survived ? "ok" : "fail", 4000);
@@ -209,7 +230,9 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
     };
     abortRef.current = () => end("Mission aborted", true);
 
-    announce(`Touchdown on ${planet}! Collect samples${S.uplink ? "" : " and bring them back to the lander"}.`, "info", 3500);
+    announce(S.uplink
+      ? `Touchdown on ${planet}! Collect samples: the antenna sends their data to Earth (${lightGameS.toFixed(1)} s light-time).`
+      : `Touchdown on ${planet}! Collect samples and bring their data back to the lander's relay.`, "info", 3500);
 
     /* ---------------- loop ---------------- */
     const dir = new THREE.Vector3(), n = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3();
@@ -231,9 +254,9 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
         if ((up || down) && !engine) engine = sfx.engine();
 
         // Mars dust storm event
-        if (P.storm) {
+        if (P.storm && stormSeason) {
           st.storm = st.time > 70 && st.time < 110;
-          if (st.storm && !st.stormAnnounced) { st.stormAnnounced = true; announce("⚠ DUST STORM! Solar power down 75%", "warn", 3500); sfx.warn(); }
+          if (st.storm && !st.stormAnnounced) { st.stormAnnounced = true; announce(`⚠ DUST STORM! Optical depth spikes, solar power down ${Math.round((1 - P.stormTransmission / P.transmission) * 100)}%`, "warn", 3500); sfx.warn(); }
           if (!st.storm && st.stormAnnounced && !st.stormOver) { st.stormOver = true; announce("Storm clearing", "ok"); }
         }
         fog.density += ((st.storm ? P.fogDensity * 4.5 : P.fogDensity) - fog.density) * dt;
@@ -244,24 +267,50 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
         st.heading += steer * 1.9 * dt * (st.speed >= -0.1 ? 1 : -1) * Math.min(1, 0.35 + Math.abs(st.speed) / 8);
         dir.set(Math.sin(st.heading), 0, Math.cos(st.heading));
 
-        // ---- drive force ----
+        // ---- drive force: real Newtonian forces on a rover of S.mass kg ----
         const boosting = boost && throttle > 0 && st.energy > 0;
+        st.slip = false;
+        let pMechUsed = 0;
         if (st.grounded) {
           const ahead = (H(st.pos.x + dir.x * 1.2, st.pos.z + dir.z * 1.2) - H(st.pos.x - dir.x * 1.2, st.pos.z - dir.z * 1.2)) / 2.4;
-          const slopeDeg = Math.atan(ahead) * 180 / Math.PI;
-          let a = throttle * S.accel * (boosting ? 1.45 : 1);
-          let slipping = false;
-          if (throttle > 0 && slopeDeg > S.climb) { a *= 0.12; slipping = true; }
-          if (throttle < 0 && -slopeDeg > S.climb) a *= 0.12;
-          const gAlong = -g * Math.sin(Math.atan(ahead));
-          st.speed += (a + gAlong) * dt;
-          st.speed -= st.speed * (throttle === 0 ? 1.3 : 0.4) * dt;
-          const vmax = S.topSpeed * (boosting ? 1.35 : 1);
-          if (st.speed > vmax) st.speed -= (st.speed - vmax) * 3 * dt;
-          if (st.speed < -vmax * 0.4) st.speed += (-vmax * 0.4 - st.speed) * 3 * dt;
+          const th = Math.atan(ahead);
+          st.slope = th * 180 / Math.PI;
+          const N = m * g * Math.cos(th);                         // normal force
+          const traction = S.mu * N;                              // max force the ground can take
+          const Fg = -m * g * Math.sin(th);                       // gravity along the slope
+          const v = st.speed, av = Math.abs(v), sgn = Math.sign(v);
+          const Frr = S.crr * N;                                  // rolling resistance (with sinkage)
+          const Fdrag = -0.5 * P.airDensity * CDA * v * av;
+          let Fdrive = 0;
+          if (throttle !== 0) {
+            const dirSign = Math.sign(throttle);
+            const pMech = S.powerW * (boosting ? 1.4 : 1);
+            const vmax = S.vmax * (boosting ? 1.25 : 1) * (dirSign < 0 ? 0.4 : 1);
+            if (v * dirSign < -0.2) {
+              Fdrive = dirSign * traction;                        // braking against motion
+            } else {
+              Fdrive = Math.min(S.forceN * (boosting ? 1.3 : 1), pMech / Math.max(av, 0.4)) * Math.abs(throttle);
+              if (av >= vmax) Fdrive = 0;
+              Fdrive *= dirSign;
+            }
+          } else if (av > 0.05) {
+            Fdrive = -sgn * Math.min(traction * 0.6, (mEff * av) / dt); // brakes hold when you let go
+          }
+          if (Math.abs(Fdrive) > traction) { Fdrive = Math.sign(Fdrive) * traction; st.slip = throttle !== 0; }
+          pMechUsed = Math.max(0, Fdrive * v);
+          st.force = Fdrive;
+          // static case: brakes / rolling resistance can hold the rover still on gentle slopes
+          if (av < 0.05 && throttle === 0 && Math.abs(Fg) <= traction) {
+            st.speed = 0;
+          } else {
+            const Fres = av < 0.05 ? -Math.sign(Fdrive + Fg) * Math.min(Frr, Math.abs(Fdrive + Fg)) : -sgn * Frr;
+            st.speed += ((Fdrive + Fg + Fdrag + Fres) / mEff) * dt;
+            if (Math.abs(Fg) > traction && throttle === 0) st.slip = true;   // sliding down a steep slope
+          }
+          const slipping = st.slip;
           // wheel dust
-          if (Math.abs(st.speed) > 2 || slipping) {
-            const nDust = Math.min(8, Math.floor(Math.abs(st.speed) / 2) + (slipping ? 6 : 0));
+          if (Math.abs(st.speed) > 1 || slipping) {
+            const nDust = Math.min(8, Math.floor(Math.abs(st.speed)) + (slipping ? 6 : 0));
             for (let i = 0; i < nDust; i++) {
               dust.emit(new THREE.Vector3(st.pos.x - dir.x * 1.5 + (Math.random() - 0.5) * 2.5, st.y + 0.3, st.pos.z - dir.z * 1.5 + (Math.random() - 0.5) * 2.5),
                 new THREE.Vector3((Math.random() - 0.5) * 2 - dir.x * st.speed * 0.3, Math.random() * 2.5 * (3 / g + 0.4), (Math.random() - 0.5) * 2 - dir.z * st.speed * 0.3),
@@ -269,12 +318,24 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
             }
           }
         } else {
-          st.speed *= 1 - 0.05 * dt;
+          st.speed -= (0.5 * P.airDensity * CDA * st.speed * Math.abs(st.speed) / mEff) * dt;
         }
 
         // ---- energy ----
-        const gen = S.genW * (st.storm ? 0.25 : 1);
-        const draw = S.drawIdle + motorDraw * Math.abs(throttle) * (boosting ? 2.2 : 1);
+        // real local solar time at the landing site advances with mission time
+        const elNow = elAt(st.time);
+        st.sunEl = elNow;
+        const deck = sunOnDeck(planet, elNow);
+        const gen = (solarPowered ? S.genNoonW * deck : S.genNoonW) * (st.storm && solarPowered ? P.stormTransmission / P.transmission : 1);
+        st.gen = gen;
+        const nightNow = elNow !== null && elNow < 0 && planet !== "Venus";
+        const heater = nightNow && !hasRtg ? NIGHT_HEATER_W[planet] : 0;
+        const light = Math.max(0.06, planet === "Venus" ? 1 : deck ** 0.5);
+        sun.intensity = (planet === "Venus" ? 1.4 : 2.6) * light;
+        // electrical draw = idle + heaters + wheel power / efficiency + copper losses while the motors push
+        const draw = S.drawIdle - S.heaterW + heater + pMechUsed / MOTOR_EFF + 0.12 * S.powerW * Math.abs(throttle) * (boosting ? 1.6 : 1)
+          + (st.tx ? HGA_TX_W : 0);
+        st.pElec = draw;
         st.energy = Math.min(S.capacity, st.energy + (gen - draw) * ENERGY_K * dt);
         const dLander = Math.hypot(st.pos.x, st.pos.z);
         const onPad = dLander < LANDER_R && Math.abs(st.speed) < 3;
@@ -287,6 +348,24 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
         st.beepT -= dt;
         if (st.energy < S.capacity * 0.15 && st.beepT <= 0) { sfx.tick(); st.beepT = 1.1; }
         if (P.heat && !S.cooling) st.hp -= 1.6 * dt;
+        st.hp -= P.radiation * activity * dt;   // NASA DONKI solar activity -> radiation dose
+
+        // ---- AutoNav (navcams): stereo hazard detection brakes before rocks, like Perseverance ----
+        st.autonavT -= dt;
+        if (S.navcam && st.grounded && st.speed > 1.2) {
+          for (const b of terrain.boulders) {
+            const dx = b.x - st.pos.x, dz = b.z - st.pos.z;
+            const along = dx * dir.x + dz * dir.z;
+            const lat = Math.abs(dx * dir.z - dz * dir.x);
+            if (along > 0 && along < 4 + st.speed * 1.2 && lat < b.r + 1.4) {
+              st.speed = Math.max(0, st.speed - S.mu * g * 1.2 * dt);   // brake at the traction limit
+              st.autonavT = 0.4;
+              if (st.autonavMsgT <= 0) { pop("AutoNav: hazard ahead, braking", "#7dd3fc"); st.autonavMsgT = 4; }
+              break;
+            }
+          }
+        }
+        st.autonavMsgT -= dt;
 
         // ---- move + world bounds + boulders ----
         const step = st.speed * dt;
@@ -304,7 +383,7 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
           if (d < min && st.y < H(b.x, b.z) + b.r * 1.3) {
             st.pos.x = b.x + (dx / d) * min; st.pos.z = b.z + (dz / d) * min;
             const v = Math.abs(st.speed);
-            if (v > 3) hit((v - 3) * 4);
+            if (v > 1.5) hit((0.5 * m * (v - 1.5) ** 2) / 120);   // crash energy (J) / chassis toughness
             st.speed *= -0.35;
           }
         }
@@ -314,12 +393,16 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
         st.jumpCd -= dt;
         if (st.grounded) {
           const follow = THREE.MathUtils.clamp((gNow - st.lastGround) / dt, -40, 40);
-          if (follow < st.vy - g * dt * 1.5 && Math.abs(st.speed) > 4) st.grounded = false;  // launched off a crest
+          if (follow < st.vy - g * dt * 1.5 && Math.abs(st.speed) > 3) st.grounded = false;  // launched off a crest
           else { st.vy = follow; st.y = gNow; }
         }
-        if (keys.has(" ") && S.jets && st.grounded && st.jumpCd <= 0 && st.energy > 60) {
-          st.vy = Math.sqrt(2 * g * 4); st.grounded = false; st.energy -= 60; st.jumpCd = 0.8; st.jetT = 0.45;
-          sfx.whoosh();
+        if (keys.has(" ") && S.jets && st.grounded && st.jumpCd <= 0) {
+          // rocket equation for a hop: gas = m·Δv / (Isp·g0); heavier rovers burn more gas
+          const gasNeed = (m * hopV) / (JET_ISP * G0);
+          if (st.gas >= gasNeed) {
+            st.vy = hopV; st.grounded = false; st.gas -= gasNeed; st.jumpCd = 0.8; st.jetT = 0.45;
+            sfx.whoosh();
+          } else if (st.jumpCd <= 0) { st.jumpCd = 1.5; pop("Jet gas empty", "#f87171"); }
         }
         if (!st.grounded) {
           st.vy -= g * dt;
@@ -333,8 +416,8 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
               for (let i = 0; i < 40; i++) dust.emit(new THREE.Vector3(st.pos.x, gNow + 0.3, st.pos.z),
                 new THREE.Vector3((Math.random() - 0.5) * 8, Math.random() * 3, (Math.random() - 0.5) * 8), 1.5, dustCol.clone().multiplyScalar(0.4));
             }
-            const safe = 7 + S.wheelR * 4;
-            if (impact > safe) hit((impact - safe) * 5);
+            const safe = 2.5 + S.wheelR * 4;                 // suspension stroke absorbs this much
+            if (impact > safe) hit((0.5 * m * (impact - safe) ** 2) / 120);
             st.y = gNow; st.vy = 0; st.grounded = true; st.airT = 0;
           }
         }
@@ -357,38 +440,55 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
         if (rig.dish) rig.dish.rotation.z += dt * 0.6;
 
         // ---- sampling ----
-        const slowEnough = Math.abs(st.speed) < (hasLaser ? 6 : 3);
+        // laser: zaps within 9 m below 6 m/s (needs a steady aim); drill: within 4.5 m, below 3 m/s, wheels down, 0.9 s
+        const LASER_MAX = 6, DRILL_MAX = 3, DRILL_REACH = 4.5;
+        const vAbs = Math.abs(st.speed);
         let drilling = false;
+        let nearest = Infinity;
+        st.sampleHint = "";
         for (let i = 0; i < sampleMeshes.length; i++) {
           const sm = sampleMeshes[i];
           if (sm.taken) continue;
           sm.gem.rotation.y += dt * 1.5;
           sm.gem.position.y += Math.sin(now / 300 + i) * 0.004;
           const d = Math.hypot(sm.s.x - st.pos.x, sm.s.z - st.pos.z);
-          if (!S.canSample || d > S.scan + 0.5) continue;
-          let collect = false;
-          if (hasLaser && (!S.drill || slowEnough)) {
+          if (sm.beam) sm.beam.visible = sm.s.kind === "legendary" || d < S.radar;   // you can only spot what your cameras see
+          sm.gem.visible = d < S.radar * 1.6;
+          if (d < nearest && d < 15) {
+            nearest = d;
+            st.sampleHint = !S.canSample ? "No laser or drill on board: can't sample"
+              : hasLaser ? (d > S.scan + 0.5 ? `Laser range is 9 m (sample ${d.toFixed(0)} m away)`
+                : vAbs >= LASER_MAX ? "Too fast for the laser: slow below 22 km/h" : "")
+              : (!st.grounded ? "Land first to drill" : d > DRILL_REACH ? `Drive within ${DRILL_REACH} m to drill (${d.toFixed(1)} m)`
+                : st.slip ? "Sliding on the slope: can't hold still to drill"
+                : vAbs >= DRILL_MAX ? "Slow below 11 km/h to drill" : "");
+          }
+          if (!S.canSample || d > Math.max(S.scan + 0.5, DRILL_REACH)) continue;
+          let collect = false, drilled = false;
+          const canDrill = S.drill && st.grounded && vAbs < DRILL_MAX && d < DRILL_REACH && !st.slip;
+          if (canDrill) {
+            drilling = true;
+            if (st.drillTarget !== i) { st.drillTarget = i; st.drill = 0; }
+            st.drill += dt / 0.9;
+            for (let k = 0; k < 3; k++) sparks.emit(sm.grp.position.clone().add(new THREE.Vector3(0, 0.5, 0)),
+              new THREE.Vector3((Math.random() - 0.5) * 6, Math.random() * 5, (Math.random() - 0.5) * 6), 0.4, new THREE.Color(0xffd166));
+            if (st.drill >= 1) { collect = true; drilled = true; }
+          } else if (hasLaser && vAbs < LASER_MAX && d <= S.scan + 0.5) {
             collect = true;
             st.laserT = 0.25;
             const arr = laserLine.geometry.attributes.position.array as Float32Array;
             const tip = new THREE.Vector3(); (rig.laserTip ?? rig.root).getWorldPosition(tip);
             arr.set([tip.x, tip.y, tip.z, sm.s.x, sm.grp.position.y + 1, sm.s.z]);
             laserLine.geometry.attributes.position.needsUpdate = true;
-          } else if (!hasLaser && S.drill && slowEnough && d < 3.8) {
-            drilling = true;
-            if (st.drillTarget !== i) { st.drillTarget = i; st.drill = 0; }
-            st.drill += dt / 0.9;
-            for (let k = 0; k < 3; k++) sparks.emit(sm.grp.position.clone().add(new THREE.Vector3(0, 0.5, 0)),
-              new THREE.Vector3((Math.random() - 0.5) * 6, Math.random() * 5, (Math.random() - 0.5) * 6), 0.4, new THREE.Color(0xffd166));
-            if (st.drill >= 1) collect = true;
           }
           if (collect) {
             sm.taken = true; sm.grp.visible = false;
-            const value = Math.round(sm.s.value * (S.drill ? 1.6 : 1));
+            const value = Math.round(sm.s.value * (drilled ? 1.6 : 1) * (S.navcam ? NAVCAM_VALUE : 1));
+            const mb = DATA_MB[sm.s.kind] * (S.navcam ? NAVCAM_DATA : 1) * (drilled ? 1.5 : 1);
             st.collected++;
-            if (S.uplink) st.banked += value; else st.carried += value;
-            if (sm.s.kind === "legendary") { st.legendary++; sfx.fanfare(); pop(`LEGENDARY +${value}`, "#ffd166", true); }
-            else { sm.s.kind === "rare" ? sfx.ready() : sfx.chime(); pop(`+${value}${S.uplink ? " ⇡" : ""}`, sm.s.kind === "rare" ? "#c084fc" : "#4fd1ff"); }
+            st.carried += value; st.carriedMB += mb;      // science only counts once its data reaches Earth
+            if (sm.s.kind === "legendary") { st.legendary++; sfx.fanfare(); pop(`LEGENDARY +${value} (${Math.round(mb)} MB)`, "#ffd166", true); }
+            else { sm.s.kind === "rare" ? sfx.ready() : sfx.chime(); pop(`+${value} · ${Math.round(mb)} MB`, sm.s.kind === "rare" ? "#c084fc" : "#4fd1ff"); }
             sparks.burst(sm.grp.position.clone().add(new THREE.Vector3(0, 1, 0)), sm.s.kind === "legendary" ? 300 : 90, 9, 0.9,
               [new THREE.Color(KIND_COLOR[sm.s.kind]), new THREE.Color(0xffffff)]);
             st.drill = 0; st.drillTarget = -1;
@@ -399,12 +499,29 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
         (laserLine.material as THREE.LineBasicMaterial).opacity = st.laserT > 0 ? 0.9 : 0;
         if (rig.drillBit) rig.drillBit.rotation.y += drilling ? dt * 30 : 0;
 
-        // ---- deliver cargo at lander ----
-        if (!S.uplink && st.carried > 0 && dLander < LANDER_R + 1) {
-          st.banked += st.carried;
-          pop(`DELIVERED +${st.carried}`, "#34d399", true);
+        // ---- telecom: UHF relay at the lander, or the high-gain antenna direct to Earth ----
+        const lt = siteTime(site, st.time * TIME_COMPRESSION, offsetH);
+        st.earthEl = earthElevation(site, lt);
+        st.tx = false;
+        if (st.carried > 0 && dLander < RELAY_RANGE) {
+          st.inflight.push({ at: st.time + lightGameS, value: st.carried });   // relay via orbiter
+          pop(`RELAYED ${Math.round(st.carriedMB)} MB via lander`, "#34d399", true);
           sfx.matchFound();
-          st.carried = 0;
+          st.carried = 0; st.carriedMB = 0;
+        } else if (S.uplink && st.carriedMB > 0 && st.earthEl > 2 && st.energy > 0) {
+          st.tx = true;
+          const sent = Math.min(st.carriedMB, S.uplinkMBs * (st.storm ? 0.6 : 1) * dt);
+          const value = st.carried * (sent / st.carriedMB);
+          st.carried -= value; st.carriedMB -= sent;
+          const last = st.inflight[st.inflight.length - 1];
+          if (last && st.time + lightGameS - last.at < 0.25) last.value += value;
+          else st.inflight.push({ at: st.time + lightGameS, value });
+          if (st.carriedMB < 1e-3) { st.carried = 0; st.carriedMB = 0; }
+        }
+        while (st.inflight.length && st.inflight[0].at <= st.time) {
+          const f = st.inflight.shift()!;
+          st.banked += f.value;
+          if (f.value >= 5) pop(`📡 Earth received +${Math.round(f.value)}`, "#34d399");
         }
 
         // storm streaks
@@ -445,6 +562,10 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
         speed: Math.abs(st.speed) * 3.6, carried: st.carried, banked: st.banked, collected: st.collected, storm: st.storm,
         drill: st.drillTarget >= 0 ? st.drill : 0, onPad: Math.hypot(st.pos.x, st.pos.z) < LANDER_R,
         air: !st.grounded && st.airT > 0.4, lowBattery: st.energy < S.capacity * 0.15, hot: P.heat && !S.cooling,
+        slip: st.slip, slope: st.slope, powerKW: st.pElec / 1000, force: st.force, gas: S.gasKg ? st.gas / S.gasKg : 0,
+        localTime: siteTime(site, st.time * TIME_COMPRESSION, offsetH), sunEl: st.sunEl, genW: st.gen,
+        queueMB: st.carriedMB, inflight: st.inflight.reduce((a, f) => a + f.value, 0), earthUp: st.earthEl > 2,
+        earthEl: st.earthEl, tx: st.tx, autonav: st.autonavT > 0, sampleHint: st.sampleHint,
       });
       const cv = map.current;
       if (!cv) return;
@@ -469,6 +590,15 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
         if (dd > W / 2 - 4) { mx = W / 2 + (mx - W / 2) * (W / 2 - 4) / dd; my = W / 2 + (my - W / 2) * (W / 2 - 4) / dd; }
         c.fillStyle = "#" + KIND_COLOR[sm.s.kind].toString(16).padStart(6, "0");
         c.beginPath(); c.arc(mx, my, sm.s.kind === "legendary" ? 4 : 2.5, 0, 7); c.fill();
+      }
+      if (S.navcam || S.uplink) {
+        c.fillStyle = "rgba(160,160,170,0.8)";
+        for (const b of terrain.boulders) {
+          const d = Math.hypot(b.x - st.pos.x, b.z - st.pos.z);
+          if (d > R || (!S.uplink && d > 40)) continue;     // navcams see ~40 m; orbital (HiRISE) maps via the HGA see all
+          const [bx, by] = toMap(b.x, b.z);
+          c.beginPath(); c.arc(bx, by, Math.max(1.5, b.r * k), 0, 7); c.fill();
+        }
       }
       let [lx, ly] = toMap(0, 0);
       const ld = Math.hypot(lx - W / 2, ly - W / 2);
@@ -496,6 +626,7 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const S0 = roverStats(build, planet, live, sunElevation(site, siteTime(site, 0, offsetH)));
   const pct = (v: number) => `${Math.max(0, Math.min(100, v * 100))}%`;
   return (
     <div className={`rover-drive ${shake ? "shake" : ""} ${hud?.storm ? "stormy" : ""}`}>
@@ -508,7 +639,14 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
             </div>
             <div className="rv-score">
               <span>BANKED <b>{Math.round(hud.banked)}</b></span>
-              {hud.carried > 0 && <span className="carry">CARRYING <b>{hud.carried}</b> → return to lander</span>}
+              {hud.carried > 0 && (
+                <span className="carry">
+                  UNSENT <b>{Math.round(hud.carried)}</b> ({Math.round(hud.queueMB)} MB)
+                  {S0.uplink ? (hud.earthUp ? (hud.tx ? ` · 📡 sending ${S0.uplinkMBs.toFixed(0)} MB/s` : "") : " · Earth below horizon → go to lander relay")
+                             : " → drive to the lander relay"}
+                </span>
+              )}
+              {hud.inflight > 0 && <span className="muted">⚡ {Math.round(hud.inflight)} in flight to Earth ({(S0.lightS / TIME_COMPRESSION).toFixed(1)} s)</span>}
               <span className="muted">samples {hud.collected}</span>
             </div>
           </div>
@@ -520,6 +658,21 @@ export function RoverDrive({ planet, build, onEnd }: { planet: RoverPlanet; buil
             {hud.air && <div className="rv-tag warn">AIRBORNE</div>}
             {hud.storm && <div className="rv-tag warn">DUST STORM</div>}
             {hud.hot && <div className="rv-tag bad">OVERHEATING</div>}
+            {hud.slip && <div className="rv-tag warn">WHEEL SLIP</div>}
+            {hud.autonav && <div className="rv-tag good">AUTONAV BRAKING</div>}
+            {hud.sampleHint && <div className="rv-tag warn">🔬 {hud.sampleHint}</div>}
+            {hud.tx && <div className="rv-tag good">TX → EARTH</div>}
+            <div className="rv-phys mono small">
+              {S0.mass} kg · {Math.round(S0.weightN)} N · slope {hud.slope.toFixed(0)}° · drive {Math.round(hud.force)} N · {hud.powerKW.toFixed(2)} kW
+              {S0.jets && <> · gas {Math.round(hud.gas * 100)}%</>}
+            </div>
+            {site && hud.localTime !== null && (
+              <div className="rv-phys mono small">
+                {site.name} · local solar time {fmtTime(hud.localTime)} · Sun {hud.sunEl !== null ? `${hud.sunEl.toFixed(0)}°` : "-"}
+                {" "}· solar {Math.round(hud.genW)} W{hud.sunEl !== null && hud.sunEl < 0 ? " · NIGHT" : ""}
+                {" "}· Earth {hud.earthEl.toFixed(0)}° {hud.earthUp ? "up" : "set"}
+              </div>
+            )}
             {hud.drill > 0 && <div className="rv-drill"><div style={{ width: pct(hud.drill) }} /></div>}
           </div>
         </>

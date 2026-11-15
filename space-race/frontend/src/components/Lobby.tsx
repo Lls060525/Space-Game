@@ -6,7 +6,8 @@ import { useSocket } from "../lib/useSocket";
 
 type Board = Awaited<ReturnType<typeof api.leaderboard>>;
 
-export function Lobby({ me, onMatch, onPractice, onRover }: { me: User; onMatch: (id: string) => void; onPractice: () => void; onRover: () => void }) {
+export function Lobby({ me, onMatch, onPractice, onRover, onScience }:
+  { me: User; onMatch: (id: string) => void; onPractice: () => void; onRover: () => void; onScience: () => void }) {
   const [online, setOnline] = useState<User[]>([]);
   const [queued, setQueued] = useState(false);
   const [board, setBoard] = useState<Board>([]);
@@ -33,7 +34,12 @@ export function Lobby({ me, onMatch, onPractice, onRover }: { me: User; onMatch:
             : <button className="big" onClick={() => send({ type: "cancel" })}>
                 <span className="pulse" /> Looking for match… (cancel)
               </button>}
+          <button className="big" disabled={!connected || queued} onClick={() => { sfx.click(); send({ type: "play_ai" }); }}
+                  title="A greedy AI engineer that drafts from the same shared pool and steals last copies">
+            🤖 Play vs AI rival
+          </button>
           <button className="big" onClick={onPractice}>Solo practice</button>
+          <button className="big" onClick={onScience}>🔬 Science & data</button>
           <button className="big rover-btn" onClick={() => { sfx.click(); onRover(); }}>🚙 Rover Expedition <span className="badge good">NEW</span></button>
         </div>
         {!connected && <p className="muted">Connecting to mission control…</p>}
